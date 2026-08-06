@@ -15,10 +15,21 @@ integration.
 Presets
 -------
 `hermes`
-    Fully implemented and used as the default when the `hermes` executable
-    is on PATH. Runs `hermes -z <prompt> --safe-mode`, which is documented
-    public CLI behaviour: one-shot mode prints only the final response text
-    to stdout — no banner, no spinner, no tool previews.
+    Used as the default when the `hermes` executable is on PATH. Runs
+    `hermes chat -q <prompt> -Q`, which is stock documented public CLI
+    syntax: `-q/--query` is single-query non-interactive mode and
+    `-Q/--quiet` is "quiet mode for programmatic use", which suppresses the
+    banner, the spinner and tool previews so stdout carries the final
+    response text and nothing else. No flag here is specific to any
+    particular build of Hermes, and this backend patches nothing and reads
+    or writes no Hermes config file.
+
+    What it does *not* do is sandbox the agent. The drafting call inherits
+    whatever toolsets the user's own Hermes configuration enables; the
+    read-only instruction lives in `DRAFT_FRAMING`, and a prompt is an
+    instruction, not an enforcement boundary. Narrowing that is a
+    documented public flag away — see the README — and it is the operator's
+    call, not this backend's to make silently.
 
 `echo`
     A dependency-free stand-in that reflects the prompt. The conformance
@@ -29,10 +40,13 @@ Other agents
     Set `CARET_AGENT_COMMAND` to any command line. `{prompt}` is replaced
     with the prompt; if the template contains no `{prompt}`, the prompt is
     written to the process's stdin instead. Whatever the command prints on
-    stdout is the answer. Example shapes are in the README. Only the two
-    presets above are exercised by this repository's tests — a command line
-    for a different agent is a configuration claim, not a tested one, and
-    the README says so per agent.
+    stdout is the answer. Example shapes are in the README.
+
+    The tests here are hermetic and spend no model tokens, so be precise
+    about what that buys you: the `echo` preset is exercised end to end,
+    and the `hermes` preset has its command line asserted but not executed.
+    A command line for any other agent is a configuration claim, not a
+    tested one, and the README says so per agent.
 """
 
 from __future__ import annotations
@@ -176,11 +190,18 @@ class EchoAgent:
 
 
 def hermes_agent(timeout: int = DRAFT_TIMEOUT_SECONDS) -> CommandAgent:
-    # --safe-mode keeps a drafting call from acquiring tools it has no
-    # business using while writing a message.
+    # Stock public syntax only: `chat -q` is the documented non-interactive
+    # single-query mode and `-Q` is the documented quiet mode for
+    # programmatic use, so stdout is the answer and nothing else (Hermes
+    # prints its session id on stderr, which this backend ignores).
+    #
+    # Deliberately no tool-restricting flag by default: the user's own
+    # Hermes configuration decides what the agent can reach, and silently
+    # overriding it would be a surprise. `-t/--toolsets` is the documented
+    # way to narrow it — put it in CARET_AGENT_COMMAND if you want it.
     return CommandAgent(
         name="hermes",
-        template='hermes -z "{prompt}" --safe-mode',
+        template='hermes chat -q "{prompt}" -Q',
         timeout=timeout,
     )
 

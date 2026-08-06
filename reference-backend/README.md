@@ -14,7 +14,7 @@ caret_backend/store.py      state — sessions, audio chunks, jobs, idempotency
 caret_backend/adapters.py   the boundary — where your agent plugs in
 caret_backend/errors.py     the error envelope
 conformance.py              a checker you can run against any caret/v1 backend
-tests/                      53 hermetic tests, no network, no model calls
+tests/                      55 hermetic tests, no network, no model calls
 ```
 
 ## Requirements
@@ -104,23 +104,55 @@ will not hand your keyboard a silently empty draft.
 
 ### Hermes
 
-Fully implemented and tested end to end.
-
 ```sh
 CARET_AGENT=hermes python3 -m caret_backend
 ```
 
-This runs `hermes -z "<prompt>" --safe-mode` per request, which is
-documented public CLI behaviour: one-shot mode prints only the final
-response text on stdout, and `--safe-mode` keeps a drafting call from
-picking up tools it has no business using while writing a message. Nothing
-is patched and no Hermes config file is read or written by this backend.
-
-To pin a model or provider, extend the command line rather than the code:
+This runs one command per request:
 
 ```sh
-export CARET_AGENT_COMMAND='hermes -z "{prompt}" --safe-mode -m gpt-5.2 --provider openai'
+hermes chat -q "<prompt>" -Q
 ```
+
+Stock, documented public CLI syntax and nothing else. `-q/--query` is
+single-query non-interactive mode; `-Q/--quiet` is quiet mode for
+programmatic use, which suppresses the banner, the spinner and tool
+previews. The result is that stdout carries the final response text and
+nothing else — Hermes prints its session id on stderr, which this backend
+ignores. No Hermes source is patched and no Hermes config file is read or
+written by this backend.
+
+To pin a model or provider, extend the command line rather than the code
+(`-m/--model` and `--provider` are documented `hermes chat` options):
+
+```sh
+export CARET_AGENT_COMMAND='hermes chat -q "{prompt}" -Q -m gpt-5.2 --provider openai'
+```
+
+**This backend does not sandbox your agent.** Be clear-eyed about what the
+preset does and does not give you:
+
+- The drafting call runs with whatever toolsets your own Hermes
+  configuration enables. Ask can therefore reach a browser, a shell or your
+  files if you have those on, even though the prompt says not to act.
+- The read-only instruction in `DRAFT_FRAMING` ("this is a draft the user
+  has not sent or inserted yet") is a prompt, not an enforcement boundary.
+  A model can ignore it.
+- The command runs with no terminal attached, so anything that would stop
+  to ask you a question cannot be answered. The 90-second agent timeout is
+  the backstop, and you get a `504 draft_timeout` rather than a hang.
+
+If you want the drafting call narrowed, do it with the documented
+`-t/--toolsets` flag, which restricts the run to the toolsets you name:
+
+```sh
+# a drafting call that can reach nothing but the one toolset you allow
+export CARET_AGENT_COMMAND='hermes chat -q "{prompt}" -Q -t clarify'
+```
+
+Pick the toolset list yourself — `hermes tools list` shows what your
+install has. This repository deliberately ships the preset *without*
+`-t` so it does not silently override a configuration you chose.
 
 ### Any other agent
 
@@ -172,7 +204,7 @@ export CARET_IMAGE_COMMAND='my-image-tool --prompt {prompt} --out {out} --size {
 python3 -m unittest discover -s tests -v
 ```
 
-53 tests, no network, no model calls, a few seconds. They start a real
+55 tests, no network, no model calls, a few seconds. They start a real
 server on a real socket and speak real HTTP to it, so routing, parsing and
 serialisation are all covered — only the agent itself is stubbed. The final
 test runs `conformance.py` against that server, so the checker you ship to

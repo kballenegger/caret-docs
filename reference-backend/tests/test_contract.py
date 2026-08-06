@@ -602,13 +602,33 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(handle.getframerate(), 16000)
             self.assertEqual(handle.readframes(handle.getnframes()), raw)
 
-    def test_hermes_is_wired_to_documented_public_cli_flags_only(self):
+    def test_hermes_uses_stock_public_chat_syntax_only(self):
+        # Stock `hermes chat`: -q/--query is non-interactive single-query
+        # mode, -Q/--quiet is quiet mode for programmatic use. Nothing here
+        # may drift towards a flag a stock install would reject.
         agent = adapters.hermes_agent()
         argv, stdin_text = agent._argv("say hi")
-        self.assertEqual(argv[0], "hermes")
-        self.assertIn("-z", argv)
-        self.assertIn("--safe-mode", argv)
-        self.assertIn("say hi", argv)
+        self.assertEqual(argv[:3], ["hermes", "chat", "-q"])
+        self.assertEqual(argv, ["hermes", "chat", "-q", "say hi", "-Q"])
+        self.assertIsNone(stdin_text)
+
+    def test_hermes_makes_no_sandbox_claim_it_cannot_enforce(self):
+        # The old preset passed --safe-mode and the docs read it as a tool
+        # restriction, which it is not. The honest posture is no
+        # tool-restricting flag at all plus a README that says so, and the
+        # operator opts in with -t via CARET_AGENT_COMMAND.
+        argv, _ = adapters.hermes_agent()._argv("say hi")
+        for flag in ("--safe-mode", "-z", "--oneshot", "--yolo", "-t", "--toolsets"):
+            self.assertNotIn(flag, argv)
+
+    def test_the_prompt_survives_as_one_argv_element_unmangled(self):
+        # No shell is involved, so quotes, newlines, backticks, $ and ;
+        # are inert data. This is the whole security posture of the
+        # command adapter and it must not regress.
+        nasty = 'a "b" `c`; rm -rf / $HOME\nsecond line \'q\''
+        argv, stdin_text = adapters.hermes_agent()._argv(nasty)
+        self.assertEqual(argv.count(nasty), 1)
+        self.assertEqual(len(argv), 5)
         self.assertIsNone(stdin_text)
 
     def test_env_wiring_prefers_an_explicit_command_over_a_preset(self):
