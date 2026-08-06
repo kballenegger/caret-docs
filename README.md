@@ -39,6 +39,15 @@ python3 reference-backend/conformance.py --base-url https://your-host --api-key 
 The checker is standard-library Python and knows nothing about the
 reference backend, so it works against an implementation in any language.
 
+**Checking a change to this repository?** One command, no dependencies:
+
+```sh
+make test
+```
+
+That runs the reference backend's 55 hermetic tests, the last of which
+runs `conformance.py` against a live instance of the server.
+
 ## What the contract asks of you
 
 Six endpoints. Only the first two are required.

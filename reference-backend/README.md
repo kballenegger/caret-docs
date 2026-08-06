@@ -204,7 +204,10 @@ export CARET_IMAGE_COMMAND='my-image-tool --prompt {prompt} --out {out} --size {
 python3 -m unittest discover -s tests -v
 ```
 
-55 tests, no network, no model calls, a few seconds. They start a real
+Or, from the repository root, `make test` — the same suite, quieter, and
+the entrypoint any CI should call.
+
+55 tests, no network, no model calls, half a minute. They start a real
 server on a real socket and speak real HTTP to it, so routing, parsing and
 serialisation are all covered — only the agent itself is stubbed. The final
 test runs `conformance.py` against that server, so the checker you ship to
