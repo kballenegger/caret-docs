@@ -1,0 +1,1272 @@
+openapi: 3.1.0
+info:
+  title: Caret BYOB API
+  version: 1.1.0
+  summary: The bring-your-own-backend contract for the Caret iOS keyboard.
+  description: |
+    Caret v1 operates with no first-party backend. The user configures a backend
+    base URL and API key in the Caret containing app; the keyboard talks to that
+    backend using this contract. This document is the single source of truth
+    between the Caret iOS client and any conforming backend implementation.
+
+    ## Conventions
+
+    - All endpoints are served under the user-configured base URL. `https://` is
+      required in production configurations; the Caret client permits `http://`
+      only for `localhost`/`127.0.0.1`, RFC-1918 hosts, `*.ts.net` hostnames, and
+      Tailscale CGNAT addresses (`100.64.0.0/10`) to support development and
+      TestFlight testing, and marks such endpoints as insecure in Settings.
+    - Every request except `GET /v1/health` requires
+      `Authorization: Bearer <api-key>`.
+    - Every request carries `X-Caret-Client` identifying the client build.
+    - Every non-2xx response uses the standard error envelope (`Error` schema)
+      with a stable machine-readable `code` and a `retryable` hint.
+    - Every response (success and error) carries a server-generated `request_id`
+      for correlation.
+    - Unknown JSON fields are always ignored by clients and servers. Additive
+      fields are non-breaking. Breaking changes require a new path version
+      (`/v2`). Error `code` values are append-only.
+
+    ## One input model for every mode (1.1)
+
+    Every generative surface — Dictate, Ask, Imagine — takes its user input
+    through the **same** client-facing interface. There is exactly one audio
+    protocol in this contract (the chunked session below); Ask and Imagine do
+    not define one of their own, they *consume* a session.
+
+    ```jsonc
+    // typed
+    "input": { "type": "text", "text": "…" }
+    // spoken — the session opened and uploaded exactly as for Dictate
+    "input": { "type": "audio", "session_id": "sess_…",
+               "client_chunk_count": 21, "client_total_duration_ms": 61800 }
+    ```
+
+    A backend declares which modes it accepts in
+    `GET /v1/health` → `capabilities.input_modes`. A surface that receives an
+    input type it does not accept answers `422 unsupported_input_type`.
+
+    ### Audio session flow (shared)
+
+    Audio is captured by the Caret containing app (never by the keyboard
+    extension), encoded as 16 kHz mono little-endian PCM16, split into
+    sequence-numbered chunks (~3 s), and uploaded with per-chunk SHA-256
+    verification:
+
+    1. `POST /v1/dictation/sessions` — open a session. `intent`
+       (`dictate` | `ask` | `imagine`, default `dictate`) is an advisory hint.
+    2. `PUT /v1/dictation/sessions/{session_id}/chunks/{seq}` — upload each
+       chunk; idempotent per `(session_id, seq)`; safe to retry.
+    3. **Consume the session** with exactly one of:
+       - `POST /v1/dictation/sessions/{session_id}/transcript` (Dictate),
+       - `POST /v1/draft` with an audio `input` (Ask),
+       - `POST /v1/imagine` with an audio `input` (Imagine).
+
+    All three consumers share identical semantics: the server verifies chunk
+    completeness first and answers `200` with `status: "missing_chunks"` and the
+    gaps to re-upload; work that outlives a request cycle answers `202` with
+    `Retry-After` and the client **re-posts the identical body** to poll; the
+    terminal result (success *or* failure) is cached on the session, so polling
+    never re-runs work and duplicate calls replay the same response. A session
+    carries exactly one terminal result: consuming an already-consumed session
+    from a *different* surface returns `409 session_conflict`, and retrying
+    after a terminal failure requires a new session.
+
+    ## Backwards compatibility
+
+    `1.0` clients sent `instruction` (Ask) and `prompt` (Imagine) as top-level
+    strings. Those remain accepted forever as aliases for
+    `input: {type: "text", text: …}`. Sending both the alias and `input` is
+    `422 input_invalid`. Responses only gained fields (`status`, `input_type`,
+    `transcript`); `DraftResponse.text` is still present and populated on every
+    successful text-input draft, so a 1.0 client needs no change.
+servers:
+  - url: "{base_url}"
+    variables:
+      base_url:
+        default: https://backend.example.com
+        description: The backend base URL the user configured in the Caret app.
+tags:
+  - name: health
+    description: Connection probe.
+  - name: draft
+    description: Ask — typed or spoken instruction to insert-ready text.
+  - name: imagine
+    description: Imagine — typed or spoken prompt to a generated image.
+  - name: dictation
+    description: Chunked audio sessions (the one audio protocol; shared by all modes).
+
+security:
+  - bearerAuth: []
+
+paths:
+  /v1/health:
+    get:
+      operationId: getHealth
+      tags: [health]
+      summary: Connection probe
+      description: |
+        Liveness and configuration probe. Must respond without authentication so
+        the Caret app can distinguish "unreachable" from "bad key" in a single
+        round trip: when an `Authorization` header is present, the server
+        validates the key and reports the result in `auth` without failing the
+        request.
+      security:
+        - {}
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CaretClient"
+      responses:
+        "200":
+          description: Backend is up.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+              examples:
+                authenticated:
+                  summary: Probe with a valid key
+                  value:
+                    status: ok
+                    service: acme-caret-backend
+                    contract: caret/v1
+                    version: 1.4.2
+                    time: "2026-08-03T09:12:44Z"
+                    auth: { presented: true, valid: true }
+                    capabilities:
+                      draft: true
+                      imagine: true
+                      dictation: true
+                      input_modes:
+                        draft: [text, audio]
+                        imagine: [text, audio]
+                        dictation: [audio]
+                    request_id: req_9f31c2
+                anonymous:
+                  summary: Probe without a key
+                  value:
+                    status: ok
+                    service: acme-caret-backend
+                    contract: caret/v1
+                    version: 1.4.2
+                    time: "2026-08-03T09:12:44Z"
+                    auth: { presented: false, valid: null }
+                    capabilities:
+                      draft: true
+                      imagine: true
+                      dictation: true
+                      input_modes:
+                        draft: [text, audio]
+                        imagine: [text, audio]
+                        dictation: [audio]
+                    request_id: req_2b8d10
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /v1/draft:
+    post:
+      operationId: createDraft
+      tags: [draft]
+      summary: Ask — draft insert-ready text from a typed or spoken instruction
+      description: |
+        Turns a user instruction into a single insert-ready message. The
+        instruction arrives either typed (`input.type: "text"`) or spoken
+        (`input.type: "audio"`, naming an audio session uploaded exactly as for
+        Dictate). The Caret client always previews the result before insertion.
+
+        Idempotent by `client_request_id`: a replay with the same id returns the
+        original result and performs no new work. Client timeout is 30 seconds
+        for text input; audio input follows the async polling rules below.
+
+        **Text input** is synchronous: `200` with `status: "complete"`.
+
+        **Audio input** behaves exactly like dictation finalize:
+        `200 status: "missing_chunks"` when uploads are incomplete, `202` +
+        `Retry-After` while the transcription/draft is in flight (re-post the
+        identical body to poll), and a terminal result cached on the session.
+        The response also carries the `transcript` that was drafted from, so the
+        client can show what it heard.
+      parameters:
+        - $ref: "#/components/parameters/CaretClient"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DraftRequest"
+            examples:
+              typed:
+                summary: Typed instruction
+                value:
+                  input:
+                    type: text
+                    text: "Reply that Thursday afternoon works, keep it short and warm."
+                  visible_text: "Could you do Thursday or Friday?"
+                  app_hint: "WhatsApp"
+                  client_request_id: "6d3f6a3e-4a1c-4b6e-9a7e-0c2d1e8f5b21"
+              spoken:
+                summary: Spoken instruction (audio session)
+                value:
+                  input:
+                    type: audio
+                    session_id: sess_b4f1e9
+                    client_chunk_count: 4
+                    client_total_duration_ms: 11200
+                  visible_text: "Could you do Thursday or Friday?"
+                  app_hint: "WhatsApp"
+                  client_request_id: "9f0f2b1a-58cc-4c0e-8f1e-77c2b0a91d34"
+              legacy:
+                summary: 1.0 alias (still supported)
+                value:
+                  instruction: "Reply that Thursday afternoon works."
+                  client_request_id: "1c9a5f7e-2f30-4c9a-9d1e-7a4bb2f0c611"
+      responses:
+        "200":
+          description: Draft produced — or `missing_chunks` listing gaps to re-upload.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DraftResponse"
+              examples:
+                typed:
+                  value:
+                    status: complete
+                    input_type: text
+                    text: "Thursday afternoon works great for me — see you then!"
+                    request_id: req_71acd0
+                spoken:
+                  value:
+                    status: complete
+                    input_type: audio
+                    text: "Thursday afternoon works great for me — see you then!"
+                    transcript: "reply that thursday afternoon works keep it short and warm"
+                    session_id: sess_b4f1e9
+                    missing_chunks: []
+                    duration_ms: 11200
+                    request_id: req_71acd1
+                missing:
+                  value:
+                    status: missing_chunks
+                    input_type: audio
+                    text: null
+                    session_id: sess_b4f1e9
+                    missing_chunks: [2]
+                    request_id: req_a17e41
+        "202":
+          description: Spoken draft in progress. Re-post the identical body after `Retry-After` seconds.
+          headers:
+            Retry-After:
+              schema: { type: integer }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsyncInProgress"
+              example:
+                status: in_progress
+                session_id: sess_b4f1e9
+                started_at: "2026-08-06T09:14:02Z"
+                elapsed_seconds: 2.1
+                retry_after_seconds: 3
+                request_id: req_f00d22
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownSession"
+        "409":
+          $ref: "#/components/responses/SessionConflict"
+        "410":
+          $ref: "#/components/responses/SessionExpired"
+        "422":
+          description: |
+            Input rejected. `instruction_invalid` (empty or over 4000 chars),
+            `input_invalid` (missing input, or both `input` and the legacy
+            alias), `unsupported_input_type` (this backend does not accept
+            audio for Ask), or an audio guard (`audio_too_short`,
+            `no_speech_detected`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                instruction:
+                  value:
+                    error:
+                      code: instruction_invalid
+                      message: "instruction must be 1-4000 characters"
+                      retryable: false
+                    request_id: req_5540bc
+                input:
+                  value:
+                    error:
+                      code: input_invalid
+                      message: "provide exactly one of input or instruction"
+                      retryable: false
+                    request_id: req_5540bd
+                unsupported:
+                  value:
+                    error:
+                      code: unsupported_input_type
+                      message: "this backend accepts text input only for /v1/draft"
+                      retryable: false
+                    request_id: req_5540be
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          description: Transcription of the spoken instruction failed (cached). Open a new session to retry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: transcription_failed
+                  message: "speech-to-text backend unavailable"
+                  retryable: true
+                request_id: req_d55e03
+        "504":
+          description: Upstream model timed out. Client offers retry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: draft_timeout
+                  message: "the model did not answer in time"
+                  retryable: true
+                request_id: req_c2d901
+
+  /v1/imagine:
+    post:
+      operationId: createImage
+      tags: [imagine]
+      summary: Imagine — generate an image from a typed or spoken prompt
+      description: |
+        Optional capability (`capabilities.imagine`). Turns a prompt into one
+        generated image the client previews and inserts. The prompt arrives
+        typed (`input.type: "text"`) or spoken (`input.type: "audio"`, an audio
+        session uploaded exactly as for Dictate) — there is no separate audio
+        path for Imagine.
+
+        Always asynchronous: the first call returns `202` with `Retry-After`,
+        and the client polls by **re-posting the identical body**. The terminal
+        result — success *and* failure — is cached per `client_request_id`, so a
+        poll never generates a second image and a retry after a terminal failure
+        requires a **new** `client_request_id`. Backends that do not implement
+        Imagine answer `404` and report `capabilities.imagine: false`.
+      parameters:
+        - $ref: "#/components/parameters/CaretClient"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImagineRequest"
+            examples:
+              typed:
+                value:
+                  input:
+                    type: text
+                    text: "a lighthouse in a storm, ink wash, muted terracotta"
+                  aspect_ratio: "1:1"
+                  quality: "high"
+                  client_request_id: "3b9d1c77-59c8-4f0f-9a1d-2f4e6b8c0a55"
+              spoken:
+                value:
+                  input:
+                    type: audio
+                    session_id: sess_c71f02
+                    client_chunk_count: 3
+                    client_total_duration_ms: 8400
+                  client_request_id: "5d2f8a10-6e3b-4a71-b0c9-15ee2a9f7d43"
+      responses:
+        "200":
+          description: Image ready — or `missing_chunks` listing gaps to re-upload.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImagineResponse"
+              examples:
+                complete:
+                  value:
+                    status: complete
+                    input_type: text
+                    media:
+                      kind: image
+                      mime_type: image/png
+                      filename: imagine.png
+                      byte_length: 812345
+                      sha256: "3f2a…"
+                      inline_base64: "iVBORw0KGgo…"
+                    provider: acme-images
+                    model: acme-image-1
+                    aspect_ratio: "1:1"
+                    size: "1024x1024"
+                    quality: high
+                    request_id: req_2f91cc
+                missing:
+                  value:
+                    status: missing_chunks
+                    input_type: audio
+                    session_id: sess_c71f02
+                    missing_chunks: [1]
+                    request_id: req_2f91cd
+        "202":
+          description: Generation in progress. Re-post the identical body after `Retry-After` seconds.
+          headers:
+            Retry-After:
+              schema: { type: integer }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsyncInProgress"
+              example:
+                status: in_progress
+                started_at: "2026-08-06T09:14:02Z"
+                elapsed_seconds: 6.4
+                retry_after_seconds: 3
+                request_id: req_9ab120
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: |
+            This backend does not implement Imagine — it reports
+            `capabilities.imagine` as false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: { code: not_found, message: "imagine is not implemented", retryable: false }
+                request_id: req_31c0aa
+        "409":
+          $ref: "#/components/responses/SessionConflict"
+        "410":
+          $ref: "#/components/responses/SessionExpired"
+        "422":
+          description: |
+            `prompt_invalid` (empty or over 4000 chars), `input_invalid`,
+            `unsupported_input_type`, `unsupported_aspect_ratio`,
+            `unsupported_quality`, or an audio guard (`audio_too_short`,
+            `no_speech_detected`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: prompt_invalid
+                  message: "prompt must be 1-4000 characters"
+                  retryable: false
+                request_id: req_77b0c1
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          description: |
+            Generation failed (cached). `image_generation_failed`, or
+            `transcription_failed` for a spoken prompt. Retry with a NEW
+            `client_request_id` (and a new session for spoken prompts).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: image_generation_failed
+                  message: "image provider unavailable"
+                  retryable: true
+                request_id: req_5c9a30
+
+  /v1/dictation/sessions:
+    post:
+      operationId: createDictationSession
+      tags: [dictation]
+      summary: Open an audio session
+      description: |
+        Opens a chunked-upload audio session — the single audio protocol for
+        every Caret mode. The session is later consumed by exactly one of
+        `POST /v1/dictation/sessions/{id}/transcript` (Dictate), `POST /v1/draft`
+        (Ask) or `POST /v1/imagine` (Imagine); `intent` says which one the client
+        expects to use, as an advisory hint only.
+
+        Idempotent by `client_request_id`: a replay returns the same
+        `session_id`. Sessions expire server-side after one hour without being
+        consumed; expired sessions return `410` from subsequent calls.
+      parameters:
+        - $ref: "#/components/parameters/CaretClient"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DictationSessionRequest"
+            example:
+              client_request_id: "0b7e9d2c-7a44-4d2b-9a11-3f6c8e0a5d77"
+              codec: pcm16
+              sample_rate_hz: 16000
+              channels: 1
+              intent: ask
+              app_hint: "Mail"
+              language_hint: "en"
+      responses:
+        "200":
+          description: Session opened (or idempotent replay).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DictationSessionResponse"
+              example:
+                session_id: sess_b4f1e9
+                chunk_max_bytes: 524288
+                chunk_target_duration_ms: 3000
+                expires_at: "2026-08-03T10:12:44Z"
+                request_id: req_e01aa3
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "415":
+          description: Codec unsupported. v1 requires pcm16.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: unsupported_audio_codec
+                  message: "only pcm16 is supported"
+                  retryable: false
+                request_id: req_88d0f2
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /v1/dictation/sessions/{session_id}/chunks/{seq}:
+    put:
+      operationId: uploadDictationChunk
+      tags: [dictation]
+      summary: Upload one audio chunk
+      description: |
+        Uploads the chunk with sequence number `seq` (0-based, contiguous).
+        Idempotent by `(session_id, seq)`: re-uploading an identical chunk
+        returns `200` with `duplicate: true`; a same-seq upload whose SHA-256
+        differs from the stored chunk returns `409 chunk_seq_conflict`. A body
+        whose SHA-256 does not match the `X-Caret-Chunk-SHA256` header returns
+        `409 chunk_checksum_mismatch` and the client re-uploads. The client
+        uploads chunks serially with retry/backoff and keeps every chunk on disk
+        until finalize succeeds.
+      parameters:
+        - $ref: "#/components/parameters/CaretClient"
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: seq
+          in: path
+          required: true
+          schema: { type: integer, minimum: 0 }
+        - name: X-Caret-Chunk-SHA256
+          in: header
+          required: true
+          description: Lowercase hex SHA-256 of the request body.
+          schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+        - name: X-Caret-Chunk-Duration-Ms
+          in: header
+          required: true
+          description: Audio duration of this chunk in milliseconds.
+          schema: { type: integer, minimum: 1 }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+              description: Raw PCM16 little-endian mono 16 kHz audio bytes. Max 524288 bytes (or the session's `chunk_max_bytes`).
+      responses:
+        "200":
+          description: Chunk accepted (or idempotent duplicate).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChunkResponse"
+              example:
+                session_id: sess_b4f1e9
+                seq: 7
+                accepted: true
+                duplicate: false
+                request_id: req_10bd77
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownSession"
+        "409":
+          description: Checksum mismatch or conflicting same-seq content.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                checksum:
+                  value:
+                    error:
+                      code: chunk_checksum_mismatch
+                      message: "body hash does not match X-Caret-Chunk-SHA256"
+                      retryable: true
+                    request_id: req_3c91e5
+                conflict:
+                  value:
+                    error:
+                      code: chunk_seq_conflict
+                      message: "a different chunk was already stored at seq 7"
+                      retryable: false
+                    request_id: req_77a2d8
+        "410":
+          $ref: "#/components/responses/SessionExpired"
+        "413":
+          description: Chunk exceeds `chunk_max_bytes`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: chunk_too_large
+                  message: "chunk exceeds 524288 bytes"
+                  retryable: false
+                request_id: req_9e01b4
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /v1/dictation/sessions/{session_id}/transcript:
+    post:
+      operationId: finalizeDictation
+      tags: [dictation]
+      summary: Finalize — produce the polished transcript
+      description: |
+        Closes the session and produces the insert-ready transcript. The server
+        first verifies chunk completeness against `client_chunk_count`; if any
+        uploads are missing it returns `200` with `missing_chunks` populated and
+        `text: null`, and the client re-uploads then re-finalizes.
+
+        Transcription may take longer than a request cycle: the server returns
+        `202` with `Retry-After` while work is in flight, and the client
+        re-polls this endpoint with the same body. The terminal result (success
+        or failure) is cached on the session — polling never re-runs
+        transcription, and duplicate finalize calls after success return the
+        identical response. A `retryable: true` failure requires a new session.
+      parameters:
+        - $ref: "#/components/parameters/CaretClient"
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FinalizeRequest"
+            example:
+              client_chunk_count: 21
+              client_total_duration_ms: 61800
+              polish: true
+      responses:
+        "200":
+          description: Transcript ready — or `missing_chunks` listing gaps to re-upload.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinalizeResponse"
+              examples:
+                success:
+                  value:
+                    session_id: sess_b4f1e9
+                    status: complete
+                    text: "Here's the plan for Thursday: I'll land at two, drop my bags, and meet you at the gallery by four."
+                    missing_chunks: []
+                    duration_ms: 61800
+                    request_id: req_f00d21
+                missing:
+                  value:
+                    session_id: sess_b4f1e9
+                    status: missing_chunks
+                    text: null
+                    missing_chunks: [7, 8]
+                    duration_ms: 0
+                    request_id: req_a17e40
+        "202":
+          description: Transcription in progress. Re-poll with the same body after `Retry-After` seconds.
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds to wait before re-polling. Default 3.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinalizeInProgress"
+              example:
+                session_id: sess_b4f1e9
+                status: in_progress
+                started_at: "2026-08-03T09:14:02Z"
+                elapsed_seconds: 2.1
+                retry_after_seconds: 3
+                request_id: req_f00d21
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownSession"
+        "410":
+          $ref: "#/components/responses/SessionExpired"
+        "422":
+          description: Audio rejected by guards (cached; not retryable with the same audio).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: no_speech_detected
+                  message: "no speech found in the uploaded audio"
+                  retryable: false
+                request_id: req_b3391a
+        "503":
+          description: Transcription failed (cached). Open a new session to retry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: transcription_failed
+                  message: "speech-to-text backend unavailable"
+                  retryable: true
+                request_id: req_d55e02
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        The user-provided API key, exactly as configured in the Caret app.
+        Stored client-side in the iOS Keychain only. Servers must treat keys as
+        opaque strings and return `401 unauthorized` for missing/invalid keys.
+
+  parameters:
+    CaretClient:
+      name: X-Caret-Client
+      in: header
+      required: true
+      description: |
+        Client identification, always sent:
+        `caret-keyboard/<app-version> ios/<ios-version> <device-model>`
+        (e.g. `caret-keyboard/1.0.0 ios/26.0 iPhone17,1`). Servers log it for
+        diagnostics and may vary behavior only on the major contract version.
+      schema:
+        type: string
+        examples: ["caret-keyboard/1.0.0 ios/26.0 iPhone17,1"]
+
+  responses:
+    ErrorResponse:
+      description: Standard error envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BadRequest:
+      description: Malformed request body.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: { code: bad_request, message: "body is not valid JSON", retryable: false }
+            request_id: req_0a11fe
+    Unauthorized:
+      description: Missing or invalid API key. The client shows "check your API key" and links to Settings.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: { code: unauthorized, message: "invalid API key", retryable: false }
+            request_id: req_44c1d9
+    RateLimited:
+      description: Rate limited. The client backs off exponentially, honoring `Retry-After` when present.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: { code: rate_limited, message: "too many requests", retryable: true }
+            request_id: req_61b0aa
+    UnknownSession:
+      description: Session id not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: { code: unknown_session, message: "no such dictation session", retryable: false }
+            request_id: req_902bd1
+    SessionConflict:
+      description: |
+        The session already carries a terminal result produced by a different
+        surface (e.g. finalized as Dictate, then posted to `/v1/draft`). A
+        session is consumed exactly once; open a new one.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: { code: session_conflict, message: "session already consumed by dictation", retryable: false }
+            request_id: req_5b12ce
+    SessionExpired:
+      description: Session TTL exceeded (1 hour without being consumed).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: { code: session_expired, message: "dictation session expired", retryable: false }
+            request_id: req_23fa08
+    ServerError:
+      description: Internal server error. The client shows a plain-language failure and offers retry.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: { code: internal_error, message: "unexpected server error", retryable: true }
+            request_id: req_7d3e5c
+
+  schemas:
+    Error:
+      type: object
+      required: [error, request_id]
+      properties:
+        error:
+          type: object
+          required: [code, message, retryable]
+          properties:
+            code:
+              type: string
+              description: |
+                Stable machine-readable code. v1 codes: `bad_request`,
+                `unauthorized`, `rate_limited`, `instruction_invalid`,
+                `draft_timeout`, `unsupported_audio_codec`, `unknown_session`,
+                `session_expired`, `chunk_checksum_mismatch`,
+                `chunk_seq_conflict`, `chunk_too_large`, `audio_too_short`,
+                `audio_too_quiet`, `no_speech_detected`,
+                `transcription_failed`, `internal_error`, and — added in 1.1 —
+                `input_invalid`, `unsupported_input_type`, `session_conflict`,
+                `prompt_invalid`, `unsupported_aspect_ratio`,
+                `unsupported_quality`, `image_generation_failed`, `not_found`.
+                The list is append-only; clients treat unknown codes by
+                `retryable`.
+            message:
+              type: string
+              description: Human-readable, safe to surface verbatim in the keyboard status row.
+            retryable:
+              type: boolean
+              description: Whether retrying the same operation may succeed.
+        request_id:
+          type: string
+          description: Server-generated correlation id, present on every response.
+
+    Health:
+      type: object
+      required: [status, contract, time]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+          description: "`degraded` means reachable but an upstream dependency is impaired; the client shows a warning state, not a failure."
+        service:
+          type: string
+          description: Implementation name, free-form.
+        contract:
+          type: string
+          description: Contract identifier. Must be `caret/v1` for this document.
+          const: caret/v1
+        version:
+          type: string
+          description: Implementation version, free-form.
+        time:
+          type: string
+          format: date-time
+        auth:
+          type: object
+          description: Present when the server evaluates authorization on health probes.
+          properties:
+            presented:
+              type: boolean
+            valid:
+              type: [boolean, "null"]
+              description: "`null` when no key was presented."
+        capabilities:
+          type: object
+          description: Which contract surfaces this backend implements.
+          properties:
+            draft: { type: boolean }
+            dictation: { type: boolean }
+            imagine:
+              type: boolean
+              description: Added in 1.1. Absent means false.
+            input_modes:
+              type: object
+              description: |
+                Added in 1.1. Which input types each surface accepts. A client
+                that does not find a surface here assumes `["text"]` for
+                `draft`/`imagine` and `["audio"]` for `dictation`.
+              additionalProperties:
+                type: array
+                items:
+                  type: string
+                  enum: [text, audio]
+              example:
+                draft: [text, audio]
+                imagine: [text, audio]
+                dictation: [audio]
+        request_id:
+          type: string
+
+    TextInput:
+      type: object
+      required: [type, text]
+      properties:
+        type: { type: string, const: text }
+        text:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: What the user typed.
+
+    AudioInput:
+      type: object
+      required: [type, session_id, client_chunk_count, client_total_duration_ms]
+      description: |
+        Names an audio session opened at `POST /v1/dictation/sessions` and
+        uploaded chunk-by-chunk. The completeness fields are the same ones
+        dictation finalize takes and are verified the same way.
+      properties:
+        type: { type: string, const: audio }
+        session_id: { type: string }
+        client_chunk_count:
+          type: integer
+          minimum: 1
+          description: Total chunks the client uploaded (seq 0..count-1).
+        client_total_duration_ms:
+          type: integer
+          minimum: 1
+        polish:
+          type: boolean
+          default: true
+          description: |
+            Whether the backend may clean the transcript before using it.
+            Same meaning as on dictation finalize.
+
+    Input:
+      description: The user's input. Exactly one of the two shapes.
+      oneOf:
+        - $ref: "#/components/schemas/TextInput"
+        - $ref: "#/components/schemas/AudioInput"
+      discriminator:
+        propertyName: type
+        mapping:
+          text: "#/components/schemas/TextInput"
+          audio: "#/components/schemas/AudioInput"
+
+    AsyncInProgress:
+      type: object
+      required: [status, retry_after_seconds, request_id]
+      description: |
+        Returned with `202` by every asynchronous surface (spoken Ask, Imagine,
+        dictation finalize). Poll by re-posting the identical request body.
+      properties:
+        status: { type: string, enum: [in_progress] }
+        session_id:
+          type: string
+          description: Present when the work is driven by an audio session.
+        started_at: { type: string, format: date-time }
+        elapsed_seconds: { type: number }
+        retry_after_seconds: { type: integer }
+        request_id:
+          type: string
+          description: Stable across every 202 poll and the eventual terminal response.
+
+    DraftRequest:
+      type: object
+      required: [client_request_id]
+      description: |
+        Provide exactly one of `input` (preferred) or `instruction` (the 1.0
+        alias for a text input). Both, or neither, is `422 input_invalid`.
+      properties:
+        input:
+          $ref: "#/components/schemas/Input"
+        instruction:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          deprecated: true
+          description: |
+            1.0 alias for a text input. Still supported.
+        visible_text:
+          type: string
+          maxLength: 4000
+          description: Optional near-cursor text from the host field (all the OS lets a keyboard see). Never the whole conversation.
+        app_hint:
+          type: string
+          maxLength: 200
+          description: Optional host-app hint (e.g. "WhatsApp"). Soft signal only.
+        client_request_id:
+          type: string
+          maxLength: 128
+          description: Client-generated UUID. Idempotency key — replays return the original result.
+
+    DraftResponse:
+      type: object
+      required: [text, request_id]
+      properties:
+        text:
+          type: [string, "null"]
+          description: |
+            The single insert-ready message. The client always previews before
+            insertion. `null` only when `status` is `missing_chunks`.
+        status:
+          type: string
+          enum: [complete, missing_chunks]
+          default: complete
+          description: Added in 1.1. Absent means `complete` (1.0 servers).
+        input_type:
+          type: string
+          enum: [text, audio]
+          description: Added in 1.1. Which input produced this draft.
+        session_id:
+          type: string
+          description: Echoed for audio input.
+        transcript:
+          type: string
+          description: |
+            Added in 1.1. What the backend heard, for audio input — the text the
+            draft was written from. Clients may show it under the preview.
+        missing_chunks:
+          type: array
+          items: { type: integer }
+          description: Sequence numbers still missing. Empty on success.
+        duration_ms:
+          type: integer
+        request_id:
+          type: string
+
+    ImagineRequest:
+      type: object
+      required: [client_request_id]
+      description: |
+        Provide exactly one of `input` (preferred) or `prompt` (the 1.0 alias
+        for a text input). Both, or neither, is `422 input_invalid`.
+      properties:
+        input:
+          $ref: "#/components/schemas/Input"
+        prompt:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          deprecated: true
+          description: |
+            1.0 alias for a text input. Still supported.
+        aspect_ratio:
+          type: string
+          maxLength: 32
+          description: Backend-defined set; unsupported values are `422 unsupported_aspect_ratio`.
+        quality:
+          type: string
+          maxLength: 16
+          description: Backend-defined set; unsupported values are `422 unsupported_quality`.
+        app_hint:
+          type: string
+          maxLength: 200
+        client_request_id:
+          type: string
+          maxLength: 128
+          description: |
+            Client-generated UUID. Idempotency key and poll key — re-posting the
+            identical body with the same id polls the same job; terminal results
+            (success and failure) are cached against it.
+
+    ImagineResponse:
+      type: object
+      required: [status, request_id]
+      properties:
+        status:
+          type: string
+          enum: [complete, missing_chunks]
+        input_type:
+          type: string
+          enum: [text, audio]
+        media:
+          type: object
+          description: The generated image. Present when `status` is `complete`.
+          required: [kind, mime_type, byte_length, sha256]
+          properties:
+            kind: { type: string, enum: [image] }
+            mime_type: { type: string }
+            filename: { type: string }
+            byte_length: { type: integer }
+            sha256:
+              type: string
+              description: Lowercase hex SHA-256 of the decoded bytes; the client verifies it.
+            inline_base64:
+              type: string
+              description: Base64 of the image bytes.
+            data_url:
+              type: string
+              description: Optional convenience form of the same bytes.
+        provider: { type: string }
+        model: { type: string }
+        aspect_ratio: { type: string }
+        size: { type: string }
+        quality: { type: string }
+        session_id: { type: string }
+        transcript:
+          type: string
+          description: What the backend heard, for a spoken prompt.
+        missing_chunks:
+          type: array
+          items: { type: integer }
+        request_id: { type: string }
+
+    DictationSessionRequest:
+      type: object
+      required: [client_request_id, codec, sample_rate_hz, channels]
+      properties:
+        client_request_id:
+          type: string
+          maxLength: 128
+          description: Idempotency key — replays return the same `session_id`.
+        codec:
+          type: string
+          enum: [pcm16]
+          description: v1 supports pcm16 (little-endian) only.
+        sample_rate_hz:
+          type: integer
+          enum: [16000]
+        channels:
+          type: integer
+          enum: [1]
+        intent:
+          type: string
+          enum: [dictate, ask, imagine]
+          default: dictate
+          description: |
+            Added in 1.1. Which surface the client expects to consume this
+            session with. Advisory: the backend may use it to pre-warm or to
+            reject early (`422 unsupported_input_type`) but must not require it,
+            and the session may still be consumed by any single surface.
+        app_hint:
+          type: string
+          maxLength: 200
+        language_hint:
+          type: string
+          maxLength: 16
+          description: Optional BCP-47 language tag; backends may ignore it.
+
+    DictationSessionResponse:
+      type: object
+      required: [session_id, chunk_max_bytes, chunk_target_duration_ms, request_id]
+      properties:
+        session_id:
+          type: string
+        chunk_max_bytes:
+          type: integer
+          description: Hard per-chunk byte cap the server enforces (413 beyond it).
+        chunk_target_duration_ms:
+          type: integer
+          description: Advisory chunk sizing (the client targets ~3000 ms but may deviate).
+        expires_at:
+          type: string
+          format: date-time
+          description: When the un-finalized session is discarded server-side.
+        request_id:
+          type: string
+
+    ChunkResponse:
+      type: object
+      required: [session_id, seq, accepted, request_id]
+      properties:
+        session_id: { type: string }
+        seq: { type: integer }
+        accepted: { type: boolean }
+        duplicate:
+          type: boolean
+          description: True when this exact chunk was already stored (idempotent replay).
+        request_id: { type: string }
+
+    FinalizeRequest:
+      type: object
+      required: [client_chunk_count, client_total_duration_ms]
+      properties:
+        client_chunk_count:
+          type: integer
+          minimum: 1
+          description: Total chunks the client uploaded (seq 0..count-1). The server verifies completeness against this.
+        client_total_duration_ms:
+          type: integer
+          minimum: 1
+        polish:
+          type: boolean
+          default: true
+          description: When true the backend may clean the raw transcript (punctuation, casing, filler removal). When false it returns raw STT output.
+
+    FinalizeResponse:
+      type: object
+      required: [session_id, status, missing_chunks, request_id]
+      properties:
+        session_id: { type: string }
+        status:
+          type: string
+          enum: [complete, missing_chunks]
+        text:
+          type: [string, "null"]
+          description: The insert-ready transcript. `null` when `status` is `missing_chunks`.
+        missing_chunks:
+          type: array
+          items: { type: integer }
+          description: Sequence numbers the server never received. Client re-uploads these, then re-finalizes.
+        duration_ms:
+          type: integer
+        request_id: { type: string }
+
+    FinalizeInProgress:
+      type: object
+      required: [session_id, status, retry_after_seconds, request_id]
+      properties:
+        session_id: { type: string }
+        status:
+          type: string
+          enum: [in_progress]
+        started_at:
+          type: string
+          format: date-time
+        elapsed_seconds:
+          type: number
+        retry_after_seconds:
+          type: integer
+        request_id:
+          type: string
+          description: Stable across every 202 poll and the eventual terminal response.
