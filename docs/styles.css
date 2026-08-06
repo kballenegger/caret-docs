@@ -1,0 +1,208 @@
+/* Caret docs — Ink & Caret.
+   One accent: terracotta appears only for state, kickers, and links. */
+
+:root {
+  --paper: #F7F5F0;
+  --ink: #14161A;
+  --signal: #E2571A;
+  --muted: #6E7480;
+  --line: #E3DFD6;
+  --card: #FDFCFA;
+  --signal-soft: #F8E9DF;
+  --mono: Menlo, "SF Mono", Consolas, monospace;
+  --ui: "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { font-size: 16px; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--ui);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 0 1.25rem 6rem;
+}
+
+header.site {
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+}
+
+header.site .wrap {
+  padding: 1rem 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+header.site img { height: 28px; display: block; }
+
+header.site .name {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-size: 1.05rem;
+}
+
+header.site .name a { color: var(--ink); text-decoration: none; }
+
+header.site nav { margin-left: auto; display: flex; gap: 1.25rem; }
+
+header.site nav a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+header.site nav a:hover, header.site nav a[aria-current] { color: var(--ink); }
+
+.kicker {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--signal);
+  margin: 3rem 0 0.5rem;
+}
+
+h1 {
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  margin: 0.25rem 0 1rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 2.75rem 0 0.75rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+
+h3 {
+  font-size: 1.02rem;
+  font-weight: 600;
+  margin: 1.75rem 0 0.5rem;
+}
+
+p, li { color: var(--ink); }
+
+.lead { font-size: 1.1rem; color: var(--muted); margin-bottom: 2rem; }
+
+a { color: var(--signal); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+pre {
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 8px;
+  padding: 1rem 1.15rem;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+pre code { background: none; border: none; padding: 0; color: inherit; font-size: inherit; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  margin: 1rem 0;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.5rem 0.75rem 0.5rem 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+th {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+td code { white-space: nowrap; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  margin: 1.5rem 0;
+}
+
+.card h3 { margin-top: 0; }
+
+.pill {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: var(--signal-soft);
+  color: var(--signal);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  margin-left: 0.5rem;
+  vertical-align: middle;
+}
+
+.endpoint {
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  font-weight: 400;
+}
+
+.endpoint .method { color: var(--signal); }
+
+footer.site {
+  border-top: 1px solid var(--line);
+  margin-top: 4rem;
+}
+
+footer.site .wrap {
+  padding: 1.5rem 1.25rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  display: flex;
+  gap: 1.5rem;
+}
+
+footer.site a { color: var(--muted); }
+
+.note {
+  border-left: 3px solid var(--signal);
+  background: var(--card);
+  padding: 0.75rem 1.15rem;
+  margin: 1.25rem 0;
+  font-size: 0.95rem;
+}
+
+.note strong { font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--signal); }

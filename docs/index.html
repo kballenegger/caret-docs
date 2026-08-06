@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Caret Docs — bring your own backend</title>
+<meta name="description" content="How to run Caret, the agentic iOS keyboard, against a backend you control. The caret/v1 contract, one input model for typed and spoken input, and a reference backend you can download.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <img src="/assets/caret-mark.svg" alt="Caret mark">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <nav>
+      <a href="/" aria-current="page">Overview</a>
+      <a href="/your-agent/">Your Agent</a>
+      <a href="https://typewithcaret.com">typewithcaret.com</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <p class="kicker">Bring your own backend</p>
+  <h1>Your keyboard, your agent, your machine.</h1>
+  <p class="lead">
+    Caret is a compose surface for iOS: speak or type an intent at the cursor,
+    preview, insert a finished message. Everything it does, it does by calling
+    an HTTP API you configure. These pages document that API and nothing else —
+    implement it and the keyboard runs on your agent.
+  </p>
+
+  <div class="card">
+    <h3>Implement the Caret API<span class="pill">caret/v1</span></h3>
+    <p>
+      One page with every request and response shape, in the order you would
+      build them: health and capabilities, Ask, spoken input over dictation
+      sessions, Imagine, the error envelope, and the conformance checker that
+      tells you when you are done.
+    </p>
+    <p><a href="/your-agent/">Read the implementation guide →</a></p>
+  </div>
+
+  <h2>The three surfaces</h2>
+  <table>
+    <tr><th>Surface</th><th>What happens</th><th>Endpoint</th></tr>
+    <tr>
+      <td><strong>Ask</strong></td>
+      <td>An instruction — typed or spoken — becomes one insert-ready message.
+          Always previewed before it goes into the text field.</td>
+      <td><code>/v1/draft</code></td>
+    </tr>
+    <tr>
+      <td><strong>Dictate</strong></td>
+      <td>Speech becomes polished, insert-ready text. Audio is uploaded in
+          small chunks as it is spoken, each verified by SHA-256.</td>
+      <td><code>/v1/dictation/*</code></td>
+    </tr>
+    <tr>
+      <td><strong>Imagine</strong></td>
+      <td>A typed or spoken prompt becomes an image, delivered through the
+          pasteboard.</td>
+      <td><code>/v1/imagine</code></td>
+    </tr>
+  </table>
+  <p>
+    Only Ask and health are required. A text-only backend is a complete
+    backend — say so in <code>capabilities</code> and Caret hides the rest.
+  </p>
+
+  <h2>One input model</h2>
+  <p>
+    Ask and Imagine accept typed text or spoken audio through the same field.
+    Audio is not a second protocol: a spoken Ask opens an ordinary dictation
+    session, uploads ordinary chunks, and then hands the session id to
+    <code>/v1/draft</code> instead of to the transcript endpoint.
+  </p>
+  <pre><code>{"input": {"type": "text",  "text": "tell Sam I'm running late"}}
+
+{"input": {"type": "audio", "session_id": "sess_9f2c",
+           "client_chunk_count": 4, "client_total_duration_ms": 11200}}</code></pre>
+  <p>
+    If you have implemented dictation, you have already implemented most of
+    spoken Ask. A session carries exactly one terminal result, so whichever
+    surface consumes it owns it.
+  </p>
+
+  <h2>Design principles</h2>
+  <ul>
+    <li><strong>No privileged server.</strong> The keyboard talks to the base
+        URL and API key you enter in the app. Any server that implements
+        <code>caret/v1</code> works.</li>
+    <li><strong>Capabilities are honest.</strong> Health declares what you
+        actually support, per surface and per input mode. The keyboard hides
+        what you have not enabled rather than failing in the user's hands.</li>
+    <li><strong>Stable error envelope.</strong> Every non-2xx response is
+        <code>{"error": {"code", "message", "retryable"}, "request_id"}</code>
+        with an append-only code list. Clients act on <code>retryable</code>
+        when they meet an unknown code.</li>
+    <li><strong>Idempotency everywhere.</strong> Mutating requests carry a
+        client-generated <code>client_request_id</code>; replays return the
+        original result and never re-run work.</li>
+    <li><strong>Additive evolution.</strong> Unknown JSON fields are ignored on
+        both sides. Breaking changes require a new path version
+        (<code>/v2</code>).</li>
+  </ul>
+
+  <h2>Start in two minutes</h2>
+  <p>
+    The reference backend is one Python package with no dependencies. Run it,
+    paste the URL and key into Caret, and your keyboard is live.
+  </p>
+  <pre><code>cd reference-backend
+export CARET_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+python3 -m caret_backend --port 8787</code></pre>
+  <p>
+    <a href="/your-agent/">The implementation guide</a> covers the rest, and
+    the machine-readable contract is at
+    <a href="/openapi.yaml"><code>openapi.yaml</code></a>.
+  </p>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="/your-agent/">Your Agent</a>
+    <a href="/openapi.yaml">openapi.yaml</a>
+  </div>
+</footer>
+</body>
+</html>

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>Caret favicon — auto light/dark apex, terracotta stem</title>
+  <style>
+    .apex { fill: #14161A; }
+    @media (prefers-color-scheme: dark) { .apex { fill: #F7F5F0; } }
+  </style>
+  <path class="apex" d="M512 128L944 704H818L512 296L206 704H80Z"/>
+  <rect fill="#E2571A" x="470" y="480" width="84" height="416"/>
+</svg>

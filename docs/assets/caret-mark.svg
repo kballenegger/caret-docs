@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>Caret mark — ink apex, terracotta insertion stem</title>
+  <!-- Canonical geometry (do not eyeball-edit):
+       apex: legs slope 4:3, outer peak (512,128), baseline y=704, horizontal thickness 126
+       stem: 84 x 416, x 470..554, y 480..896 (insertion point)
+       content box 80..944 x 128..896 — centred at (512,512) -->
+  <path fill="#14161A" d="M512 128L944 704H818L512 296L206 704H80Z"/>
+  <rect fill="#E2571A" x="470" y="480" width="84" height="416"/>
+</svg>

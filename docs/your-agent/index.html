@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Implement the Caret API — caret/v1</title>
+<meta name="description" content="Complete implementation guide for the caret/v1 backend contract: health and capabilities, Ask with typed or spoken input, dictation sessions, Imagine, async polling, idempotency, errors, security, and a conformance checker.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <img src="/assets/caret-mark.svg" alt="Caret mark">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/your-agent/" aria-current="page">Your Agent</a>
+      <a href="https://typewithcaret.com">typewithcaret.com</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <p class="kicker">caret/v1 · contract 1.1</p>
+  <h1>Implement the Caret API.</h1>
+  <p class="lead">
+    Everything the keyboard sends and everything it expects back, in the order
+    you would build it. Six endpoints; two of them are required. The
+    machine-readable version of this page is
+    <a href="/openapi.yaml"><code>openapi.yaml</code></a> — where the two
+    disagree, the OpenAPI document wins.
+  </p>
+
+  <div class="note">
+    <strong>Shortest path</strong>
+    <p style="margin:0.4rem 0 0">
+      Implement <code>GET /v1/health</code> and <code>POST /v1/draft</code>
+      with typed input, declare
+      <code>{"draft": true, "dictation": false, "imagine": false}</code>, and
+      you have a working keyboard. Everything below that is optional and
+      additive.
+    </p>
+  </div>
+
+  <h2>Ground rules</h2>
+  <table>
+    <tr><th>Rule</th><th>Detail</th></tr>
+    <tr><td>Base URL</td>
+        <td>Whatever the user enters in Caret. Paths are appended verbatim, so
+            <code>https://host/caret</code> means
+            <code>https://host/caret/v1/health</code>.</td></tr>
+    <tr><td>Transport</td>
+        <td><code>https://</code> is required. Terminate TLS wherever you
+            like — a reverse proxy or a private tunnel is fine.</td></tr>
+    <tr><td>Versioning</td>
+        <td>The path carries the version. Additive changes stay in
+            <code>/v1</code>; anything breaking becomes <code>/v2</code>.
+            Ignore JSON fields you do not recognise — the keyboard does.</td></tr>
+    <tr><td>Auth</td>
+        <td><code>Authorization: Bearer &lt;key&gt;</code> on every endpoint
+            except health. Compare in constant time.</td></tr>
+    <tr><td>Content type</td>
+        <td><code>application/json</code>, except chunk upload, which is
+            <code>application/octet-stream</code>.</td></tr>
+    <tr><td>Correlation</td>
+        <td>Every response — success or failure — carries a server-generated
+            <code>request_id</code>.</td></tr>
+    <tr><td>Client header</td>
+        <td>Caret sends <code>X-Caret-Client: caret-ios/&lt;version&gt;</code>.
+            Log it; do not branch on it.</td></tr>
+  </table>
+
+  <h2>1 · Health and capabilities</h2>
+  <p class="endpoint"><span class="method">GET</span> /v1/health — no auth</p>
+  <p>
+    Called on every settings save and periodically while the keyboard is in
+    use. It is the only anonymous endpoint: a user pasting a URL needs to find
+    out whether it is a Caret backend before they have a key.
+  </p>
+  <pre><code>{
+  "status": "ok",
+  "service": "my-backend",
+  "contract": "caret/v1",
+  "version": "1.1.0",
+  "time": "2026-08-06T11:40:20Z",
+  "auth": {"presented": true, "valid": true},
+  "capabilities": {
+    "draft": true,
+    "dictation": true,
+    "imagine": false,
+    "input_modes": {
+      "draft": ["text", "audio"],
+      "dictation": ["audio"]
+    }
+  }
+}</code></pre>
+  <ul>
+    <li><code>status</code> is <code>ok</code> or <code>degraded</code>.
+        <code>degraded</code> means reachable but impaired — the keyboard shows
+        a warning, not a failure.</li>
+    <li><code>auth.presented</code> / <code>auth.valid</code> let the settings
+        screen tell "wrong key" apart from "wrong URL". With no
+        <code>Authorization</code> header, report
+        <code>{"presented": false, "valid": null}</code>.</li>
+    <li><code>capabilities</code> drives the UI. Report what you can actually
+        do right now — a surface you advertise and cannot serve fails in the
+        user's hands.</li>
+    <li><code>capabilities.input_modes</code> is per surface. Omit a surface
+        entirely, or list only <code>["text"]</code>, and the keyboard will not
+        offer its microphone there.</li>
+  </ul>
+
+  <h2>2 · Ask</h2>
+  <p class="endpoint"><span class="method">POST</span> /v1/draft</p>
+  <p>
+    The core surface: an instruction becomes one message, ready to insert. The
+    user sees the result before it lands in the text field, so your job is to
+    return the message itself — no preamble, no quotation marks, no markdown
+    fence.
+  </p>
+
+  <h3>Request</h3>
+  <pre><code>{
+  "client_request_id": "5F2A…",          // required, ≤128 chars, idempotency key
+  "input": {"type": "text", "text": "tell Sam I'm running ten minutes late"},
+  "visible_text": "sam: still on for 3?", // optional, ≤4000, text near the cursor
+  "app_hint": "com.apple.MobileSMS"       // optional, ≤200, soft register hint
+}</code></pre>
+  <p>
+    <code>input</code> is the one place the request says <em>what the user
+    meant</em>. It is either typed text or a finished audio session:
+  </p>
+  <table>
+    <tr><th>Field</th><th>Type</th><th>Notes</th></tr>
+    <tr><td><code>type</code></td><td><code>"text"</code> | <code>"audio"</code></td><td>Discriminator. Required.</td></tr>
+    <tr><td><code>text</code></td><td>string</td><td>Text input only. 1–4000 characters.</td></tr>
+    <tr><td><code>session_id</code></td><td>string</td><td>Audio only. A dictation session you have already accepted chunks for.</td></tr>
+    <tr><td><code>client_chunk_count</code></td><td>integer ≥ 1</td><td>Audio only. How many chunks the client uploaded — the completeness check.</td></tr>
+    <tr><td><code>client_total_duration_ms</code></td><td>integer ≥ 1</td><td>Audio only. The client's own measure, advisory.</td></tr>
+    <tr><td><code>polish</code></td><td>boolean</td><td>Audio only, default <code>true</code>. Clean the transcript before the agent reads it.</td></tr>
+  </table>
+  <p>
+    <code>visible_text</code> is what the keyboard can see near the cursor —
+    often nothing, and never the whole conversation. Treat it as a register
+    hint, not as context you can rely on. <code>app_hint</code> is a bundle
+    identifier; use it to pick a tone, never to gate behaviour.
+  </p>
+
+  <h3>Response</h3>
+  <pre><code>{
+  "text": "Hey Sam, I'm running about ten minutes late.",
+  "status": "complete",
+  "input_type": "text",
+  "request_id": "req_414d33"
+}</code></pre>
+  <p>
+    <code>text</code> and <code>request_id</code> are required.
+    <code>status</code> defaults to <code>complete</code> and is only ever
+    <code>missing_chunks</code> on the audio path — the one case where
+    <code>text</code> may be <code>null</code>.
+  </p>
+
+  <h2>3 · Spoken input</h2>
+  <p>
+    Spoken Ask and spoken Imagine are not a second protocol. The client records
+    into an ordinary dictation session, uploads ordinary chunks, and then hands
+    the session id to <code>/v1/draft</code> or <code>/v1/imagine</code>
+    instead of to the transcript endpoint. One session, one terminal result,
+    whichever surface claims it.
+  </p>
+  <pre><code>POST /v1/dictation/sessions            → session_id
+PUT  …/chunks/0, /chunks/1, …          → as the user speaks
+  ├── POST …/transcript                → Dictate: text
+  ├── POST /v1/draft   {input:{type:"audio", …}}   → Ask: text
+  └── POST /v1/imagine {input:{type:"audio", …}}   → Imagine: image</code></pre>
+
+  <h3>Open a session</h3>
+  <p class="endpoint"><span class="method">POST</span> /v1/dictation/sessions</p>
+  <pre><code>// request
+{
+  "client_request_id": "A17C…",
+  "codec": "pcm16",          // v1 supports pcm16 only
+  "sample_rate_hz": 16000,   // fixed
+  "channels": 1,             // fixed
+  "intent": "ask",           // advisory: dictate | ask | imagine
+  "app_hint": "com.apple.MobileSMS",
+  "language_hint": "en-US"   // optional, ≤16 chars
+}
+
+// response
+{
+  "session_id": "sess_9f2c4d",
+  "chunk_max_bytes": 524288,
+  "chunk_target_duration_ms": 3000,
+  "expires_at": "2026-08-06T12:40:20Z",
+  "request_id": "req_31c0aa"
+}</code></pre>
+  <p>
+    <code>intent</code> tells you which surface expects to consume the session,
+    which is useful for warming a model — but it is advisory. Reject it early
+    only if you genuinely cannot serve that surface at all. Sessions live one
+    hour; the client opens a new one after that. Replaying a
+    <code>client_request_id</code> must return the same session rather than
+    stranding audio in an orphan.
+  </p>
+
+  <h3>Upload chunks</h3>
+  <p class="endpoint"><span class="method">PUT</span> /v1/dictation/sessions/{session_id}/chunks/{seq}</p>
+  <pre><code>Content-Type: application/octet-stream
+X-Caret-Chunk-SHA256: 3f786850e387550fdab836ed7e6dc881de23001b
+X-Caret-Chunk-Duration-Ms: 3000
+
+&lt;raw PCM16, little-endian, 16 kHz, mono&gt;</code></pre>
+  <p>
+    Chunks are uploaded while the user is still speaking, roughly one every
+    three seconds, numbered from <code>0</code>. Each is idempotent per
+    <code>(session_id, seq)</code>, because a phone on a flaky network retries.
+    Two rules make that safe, and they are worth keeping distinct:
+  </p>
+  <ul>
+    <li>The body does not match its own <code>X-Caret-Chunk-SHA256</code>:
+        <code>409 chunk_checksum_mismatch</code>, <code>retryable: true</code>.
+        The transport corrupted it; sending it again may work.</li>
+    <li>The digest is valid but differs from a chunk you already stored at that
+        <code>seq</code>: <code>409 chunk_seq_conflict</code>,
+        <code>retryable: false</code>. The client has a bug; retrying cannot
+        fix it.</li>
+  </ul>
+  <p>
+    An identical re-upload is a <code>200</code> with
+    <code>"duplicate": true</code>. Over <code>chunk_max_bytes</code> is
+    <code>413 chunk_too_large</code>.
+  </p>
+  <pre><code>{"session_id": "sess_9f2c4d", "seq": 0, "accepted": true,
+ "duplicate": false, "request_id": "req_88b1c2"}</code></pre>
+
+  <h3>Finish</h3>
+  <p class="endpoint"><span class="method">POST</span> /v1/dictation/sessions/{session_id}/transcript</p>
+  <pre><code>// request
+{"client_chunk_count": 4, "client_total_duration_ms": 11200, "polish": true}
+
+// response
+{
+  "session_id": "sess_9f2c4d",
+  "status": "complete",
+  "text": "Let's push the review to Thursday afternoon.",
+  "missing_chunks": [],
+  "duration_ms": 11200,
+  "request_id": "req_5a09de"
+}</code></pre>
+  <p>
+    <code>client_chunk_count</code> is how the client tells you it is done and
+    how you detect gaps. If chunks are missing, that is <strong>not</strong> an
+    error — answer <code>200</code> with a terminal
+    <code>missing_chunks</code> result so the client can upload exactly what is
+    absent and call again:
+  </p>
+  <pre><code>{"session_id": "sess_9f2c4d", "status": "missing_chunks",
+ "text": null, "missing_chunks": [2], "request_id": "req_5a09de"}</code></pre>
+  <p>
+    A <code>missing_chunks</code> answer binds the session to that surface but
+    does not close it — more audio is exactly what it asked for. Only a real
+    result seals the session; after that, any other surface that presents the
+    same <code>session_id</code> gets <code>409 session_conflict</code>.
+  </p>
+
+  <h3>The same session through Ask</h3>
+  <pre><code>POST /v1/draft
+{
+  "client_request_id": "B92E…",
+  "input": {
+    "type": "audio",
+    "session_id": "sess_9f2c4d",
+    "client_chunk_count": 4,
+    "client_total_duration_ms": 11200,
+    "polish": true
+  }
+}
+
+→ 200
+{
+  "text": "Thursday afternoon works — shall we say 2pm?",
+  "status": "complete",
+  "input_type": "audio",
+  "session_id": "sess_9f2c4d",
+  "transcript": "let's push the review to thursday afternoon",
+  "missing_chunks": [],
+  "duration_ms": 11200,
+  "request_id": "req_c31f07"
+}</code></pre>
+  <p>
+    Return <code>transcript</code> alongside <code>text</code>. The keyboard
+    shows the user what it heard, which is how they tell a mis-hearing apart
+    from a bad answer.
+  </p>
+
+  <h2>4 · Async work</h2>
+  <p>
+    Anything that may take a while — transcription, generation — uses one
+    convention across every endpoint. Answer <code>202</code> while the work is
+    running:
+  </p>
+  <pre><code>HTTP/1.1 202 Accepted
+Retry-After: 3
+
+{"status": "in_progress", "session_id": "sess_9f2c4d",
+ "started_at": "2026-08-06T11:40:20Z", "elapsed_seconds": 3.2,
+ "retry_after_seconds": 3, "request_id": "req_c31f07"}</code></pre>
+  <p>
+    The client polls by <strong>re-POSTing the identical body</strong>. There
+    is no job id and no second endpoint: the request <em>is</em> the handle.
+    That puts three requirements on you.
+  </p>
+  <ul>
+    <li><strong><code>request_id</code> is stable</strong> from the first
+        <code>202</code> through the terminal response. It identifies the work,
+        not the HTTP round trip.</li>
+    <li><strong>Re-posting never starts a second job.</strong> Register the job
+        and check for an existing one under one lock, or a client that polls
+        twice pays twice.</li>
+    <li><strong>Terminal results are cached</strong> — successes and failures
+        both. A failed generation that silently re-runs on the next poll is a
+        surprising bill.</li>
+  </ul>
+  <p>
+    Doing the work synchronously is fine if you can finish inside the client's
+    timeout; <code>202</code> is a tool, not an obligation.
+  </p>
+
+  <h2>5 · Imagine</h2>
+  <p class="endpoint"><span class="method">POST</span> /v1/imagine — optional</p>
+  <p>
+    Same input model as Ask: <code>{"type": "text"}</code> or
+    <code>{"type": "audio"}</code>, the latter consuming a dictation session
+    exactly as above. If you do not implement it, report
+    <code>"imagine": false</code> in capabilities and answer
+    <code>404 not_found</code>.
+  </p>
+  <pre><code>// request
+{
+  "client_request_id": "C40D…",
+  "input": {"type": "text", "text": "a lighthouse at dusk, watercolour"},
+  "aspect_ratio": "square",   // square | landscape | portrait
+  "quality": "standard"       // fast | standard | best
+}
+
+// response
+{
+  "status": "complete",
+  "input_type": "text",
+  "media": {
+    "kind": "image",
+    "mime_type": "image/png",
+    "filename": "caret-imagine.png",
+    "byte_length": 184320,
+    "sha256": "9f86d081884c7d65…",
+    "inline_base64": "iVBORw0KGgo…"
+  },
+  "provider": "my-image-tool",
+  "request_id": "req_77af10"
+}</code></pre>
+  <p>
+    <code>byte_length</code> and <code>sha256</code> are required and must
+    describe the bytes you are actually delivering. Return the image as
+    <code>inline_base64</code>, or as a <code>data_url</code>, or as a URL the
+    client can fetch — pick one.
+  </p>
+
+  <h2>6 · Idempotency</h2>
+  <p>
+    Every mutating request carries a client-generated
+    <code>client_request_id</code> (≤128 characters). Replaying one must return
+    the original result without re-running the work. The keyboard retries on
+    connection drops, and a user who sees a network error and taps again should
+    not be charged for two generations.
+  </p>
+  <p>
+    Cache successes. Whether you cache failures is your call for the
+    synchronous path — but for a <code>202</code> job the answer is yes, or
+    polling turns every failure into an infinite retry loop.
+  </p>
+
+  <h2>7 · Errors</h2>
+  <p>Every non-2xx response, on every endpoint, is exactly this shape:</p>
+  <pre><code>{
+  "error": {
+    "code": "session_conflict",
+    "message": "session already consumed by dictation",
+    "retryable": false
+  },
+  "request_id": "req_2bdad6"
+}</code></pre>
+  <p>
+    <code>message</code> is shown to the user verbatim in the status row, so
+    keep it short and free of internals. Never let a traceback or an HTML error
+    page reach the wire — a client that cannot parse your error has no way to
+    behave sensibly.
+  </p>
+  <table>
+    <tr><th>Status</th><th>Codes</th></tr>
+    <tr><td>400</td><td><code>bad_request</code></td></tr>
+    <tr><td>401</td><td><code>unauthorized</code></td></tr>
+    <tr><td>404</td><td><code>not_found</code>, <code>unknown_session</code></td></tr>
+    <tr><td>409</td><td><code>chunk_checksum_mismatch</code>, <code>chunk_seq_conflict</code>, <code>session_conflict</code></td></tr>
+    <tr><td>410</td><td><code>session_expired</code></td></tr>
+    <tr><td>413</td><td><code>chunk_too_large</code></td></tr>
+    <tr><td>415</td><td><code>unsupported_audio_codec</code></td></tr>
+    <tr><td>422</td><td><code>input_invalid</code>, <code>instruction_invalid</code>, <code>prompt_invalid</code>, <code>unsupported_input_type</code>, <code>unsupported_aspect_ratio</code>, <code>unsupported_quality</code>, <code>audio_too_short</code>, <code>audio_too_quiet</code>, <code>no_speech_detected</code></td></tr>
+    <tr><td>429</td><td><code>rate_limited</code></td></tr>
+    <tr><td>500 / 503</td><td><code>internal_error</code>, <code>transcription_failed</code>, <code>image_generation_failed</code></td></tr>
+    <tr><td>504</td><td><code>draft_timeout</code></td></tr>
+  </table>
+  <p>
+    The list is append-only. Clients meeting an unknown code fall back to
+    <code>retryable</code>, so set that field truthfully — it is the only thing
+    a future client can rely on.
+  </p>
+
+  <h2>8 · Backwards compatibility</h2>
+  <p>
+    Contract 1.0 sent the instruction as a bare string. Both spellings are
+    still accepted:
+  </p>
+  <pre><code>{"instruction": "say hello"}                       // 1.0, still valid
+{"input": {"type": "text", "text": "say hello"}}   // 1.1
+{"prompt": "a lighthouse"}                         // 1.0 imagine alias</code></pre>
+  <p>
+    Accept exactly one. Both together, or neither, is
+    <code>422 input_invalid</code> — guessing which one the client meant is
+    worse than a clear error. If you are writing a backend today, implement
+    <code>input</code> and accept the aliases for older clients; the aliases
+    keep their 1.0 error codes (<code>instruction_invalid</code>,
+    <code>prompt_invalid</code>) so existing clients keep matching on them.
+  </p>
+
+  <h2>9 · Security posture</h2>
+  <ul>
+    <li><strong>TLS is not optional.</strong> The keyboard refuses plain HTTP.
+        Terminate TLS in a proxy or tunnel; your app process can stay on
+        loopback.</li>
+    <li><strong>Fail closed.</strong> No keys configured means every
+        authenticated request is <code>401</code>, not "open to everyone".</li>
+    <li><strong>Constant-time key comparison,</strong> and never log the key —
+        log the <code>request_id</code> instead.</li>
+    <li><strong>One key per device</strong> makes revocation a matter of
+        removing one string.</li>
+    <li><strong>Audio is the sensitive part.</strong> Delete chunks as soon as
+        a session reaches a terminal result, and expire whole sessions on a
+        timer. Recordings that outlive their transcript are a liability with no
+        upside.</li>
+    <li><strong>Bound your inputs.</strong> Enforce the size limits above
+        rather than trusting <code>Content-Length</code>, and reject session
+        ids that could escape your storage directory.</li>
+    <li><strong>Treat <code>visible_text</code> as untrusted.</strong> It is
+        text from someone else's message and may try to instruct your agent.
+        It is context for register, not a command.</li>
+    <li><strong>Ask is read-only.</strong> The user has not inserted anything
+        yet. A draft that books the meeting it is describing is a side effect
+        nobody approved — say so in your prompt, every time.</li>
+  </ul>
+
+  <h2>10 · Check yourself</h2>
+  <p>
+    The reference repository ships a conformance checker: standard-library
+    Python, no knowledge of any particular implementation, so it works against
+    a backend written in any language.
+  </p>
+  <pre><code>python3 reference-backend/conformance.py \
+    --base-url https://your-host --api-key "$CARET_API_KEY"</code></pre>
+  <p>
+    It exercises the parts that are easy to get subtly wrong — the one input
+    model, chunk idempotency, checksum rejection, stable
+    <code>request_id</code> across polls, one terminal result per session — and
+    skips what your capabilities say you do not implement. Exit code 0 means
+    the keyboard will be happy.
+  </p>
+  <p>A first smoke test by hand:</p>
+  <pre><code>curl -s https://your-host/v1/health | python3 -m json.tool
+
+curl -s -X POST https://your-host/v1/draft \
+  -H "Authorization: Bearer $CARET_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"client_request_id":"smoke-1",
+       "input":{"type":"text","text":"tell Sam I am running ten minutes late"}}' \
+  | python3 -m json.tool</code></pre>
+
+  <h2>11 · The reference backend</h2>
+  <p>
+    If you would rather not write one, the repository includes a complete
+    <code>caret/v1</code> backend in about a thousand lines of Python with no
+    dependencies. It is meant to be read as much as run: every rule on this
+    page is implemented once, in an obvious place.
+  </p>
+  <pre><code>cd reference-backend
+export CARET_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+echo "$CARET_API_KEYS"          # paste this into Caret
+python3 -m caret_backend --port 8787
+
+python3 -m unittest discover -s tests     # 53 hermetic tests, no network
+python3 conformance.py --base-url http://localhost:8787 --api-key "$CARET_API_KEYS"</code></pre>
+  <p>
+    Your agent plugs in as a command line — anything that takes a prompt and
+    prints a reply on stdout:
+  </p>
+  <pre><code>export CARET_AGENT_COMMAND='my-agent --quiet {prompt}'   # or stdin, if no {prompt}
+export CARET_STT_COMMAND='whisper-cli -m model.bin -f {audio} --no-timestamps'
+export CARET_IMAGE_COMMAND='my-image-tool --prompt {prompt} --out {out}'</code></pre>
+  <p>
+    Dictation and Imagine stay off — and say so in <code>capabilities</code> —
+    until you configure those two. Full configuration, TLS notes and the
+    per-agent details are in the reference backend's own README.
+  </p>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="/">Overview</a>
+    <a href="/openapi.yaml">openapi.yaml</a>
+  </div>
+</footer>
+</body>
+</html>
