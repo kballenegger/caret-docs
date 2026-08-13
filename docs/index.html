@@ -40,6 +40,10 @@
       tells you when you are done.
     </p>
     <p><a href="/your-agent/">Read the implementation guide →</a></p>
+    <p>
+      Point your agent at <a href="/agent-prompts/implement-caret-backend.md">the
+      agent implementation prompt</a> and it implements the backend for you.
+    </p>
   </div>
 
   <h2>The three surfaces</h2>
@@ -109,7 +113,8 @@
   <h2>Start in two minutes</h2>
   <p>
     The reference backend is one Python package with no dependencies. Run it,
-    paste the URL and key into Caret, and your keyboard is live.
+    paste the URL and key into Caret, and your keyboard is live. It is
+    intentionally customizable: every provider is a replaceable seam.
   </p>
   <pre><code>cd reference-backend
 export CARET_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"

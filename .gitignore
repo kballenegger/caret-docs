@@ -6,3 +6,5 @@ venv/
 # Runtime state: sessions, audio chunks, job results.
 data/
 *.log
+# Generated deployable static site.
+_site/

@@ -10,6 +10,7 @@ your typing.
 
 ```
 openapi.yaml        the caret/v1 contract — the normative document
+agent-prompts/      implementation prompts for coding agents
 docs/               the implementation guide, as a static site
 reference-backend/  a complete backend in stdlib Python, ~1000 lines
 ```
@@ -38,6 +39,14 @@ python3 reference-backend/conformance.py --base-url https://your-host --api-key 
 
 The checker is standard-library Python and knows nothing about the
 reference backend, so it works against an implementation in any language.
+
+### Let your agent build it
+
+Point your coding agent at
+[`agent-prompts/implement-caret-backend.md`](agent-prompts/implement-caret-backend.md)
+or <https://docs.typewithcaret.com/agent-prompts/implement-caret-backend.md>.
+It will interview you about STT, cleanup model, harness, and image model, then
+build or adapt the backend for you.
 
 **Checking a change to this repository?** One command, no dependencies:
 
