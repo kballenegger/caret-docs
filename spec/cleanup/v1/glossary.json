@@ -1,0 +1,67 @@
+{
+  "spec": "caret-cleanup",
+  "version": 1,
+  "_comment": "Public-safe default glossary for the caret-cleanup system prompt. Every entry is a term from Caret's own public vocabulary: the contract, the agents it connects to, and the setup nouns a user says out loud. Nothing operator-, person-, host-, or deployment-specific belongs here — a deployment adds its own vocabulary at runtime instead (see README.md). Entries bias spelling and casing only, in context; they are never a blind find-and-replace.",
+  "entries": [
+    {
+      "canonical": "Caret",
+      "common_misrecognitions": ["carrot", "karat", "carat", "caret keyboard"],
+      "context": "The dictation keyboard and the backend contract it speaks. Only when the words around it are about the keyboard, the app, or the backend — an actual carrot stays a carrot."
+    },
+    {
+      "canonical": "caret/v2",
+      "common_misrecognitions": ["caret v2", "caret slash v2", "carrot v2", "caret version 2"],
+      "context": "The current contract identifier, written with a slash and a lowercase v."
+    },
+    {
+      "canonical": "caret/v1",
+      "common_misrecognitions": ["caret v1", "caret slash v1", "carrot v1", "caret version 1"],
+      "context": "The earlier contract identifier, written the same way. Do not renumber a version the speaker said."
+    },
+    {
+      "canonical": "GrokBot",
+      "common_misrecognitions": ["grok bot", "grokbot", "rock bot", "croc bot"],
+      "context": "An agent backend Caret can connect to. One word, capital G and capital B."
+    },
+    {
+      "canonical": "Claude Code",
+      "common_misrecognitions": ["claud code", "clod code", "cloud code", "claude-code"],
+      "context": "An agent CLI Caret can connect to. Two words, both capitalized."
+    },
+    {
+      "canonical": "Codex",
+      "common_misrecognitions": ["codecs", "co decks", "code x"],
+      "context": "An agent CLI Caret can connect to."
+    },
+    {
+      "canonical": "Hermes",
+      "common_misrecognitions": ["hermies", "her mes", "harmless"],
+      "context": "An agent CLI Caret can connect to."
+    },
+    {
+      "canonical": "OpenClaw",
+      "common_misrecognitions": ["open claw", "open clause", "open close", "openclaw"],
+      "context": "An agent Caret can connect to. One word, capital O and capital C."
+    },
+    {
+      "canonical": "OpenWhisper",
+      "common_misrecognitions": ["open whisper", "openwisper", "open whisperer"],
+      "context": "The default local speech-to-text engine. One word, capital O and capital W."
+    },
+    {
+      "canonical": "Tailscale",
+      "common_misrecognitions": ["tail scale", "tale scale", "tail skill", "tailscape"],
+      "context": "A private network people reach their own backend over. One word, capital T only."
+    },
+    {
+      "canonical": "QR code",
+      "common_misrecognitions": ["cure code", "queue are code", "q r code", "qr-code"],
+      "context": "The pairing code the app scans. Capital Q, capital R, lowercase code."
+    },
+    {
+      "canonical": "API key",
+      "common_misrecognitions": ["a p i key", "apikey", "ap i key"],
+      "context": "The bearer credential a backend is configured with. Capital A P I, lowercase key."
+    }
+  ]
+}

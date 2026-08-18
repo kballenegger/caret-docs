@@ -35,7 +35,9 @@ them by guessing. Ask all four at once:
    audio on the machine; hosted is usually more accurate and needs a key.
 2. **The cleanup model.** Which LLM should polish raw transcripts into
    written text and draft messages? This is the model the user's keyboard
-   will sound like.
+   will sound like. Which model is their choice; what that model is
+   *told* is not — that is the published `caret-cleanup/1` spec, and
+   step 2 covers it.
 3. **The agent harness.** Which agent do they already run — Hermes, or any
    other CLI agent that takes a prompt and prints a reply on stdout?
 4. **Images.** Which image model for Imagine, if any? Imagine is optional
@@ -103,6 +105,49 @@ Two escape hatches are open to you, and you should use them when they fit:
   `conformance.py` is the judge. Nothing else about the reference backend
   is binding.
 
+### The cleanup prompt is specified, not invented
+
+Cleanup is the one place your backend hands the user's own words to a
+language model, so the wording is published as data rather than left to
+each implementation. It lives in `spec/cleanup/v1/` in this repository
+and is documented at <https://docs.typewithcaret.com/cleanup/>:
+
+| File | What it is |
+| --- | --- |
+| `prompt.md` | The system prompt, verbatim. |
+| `glossary.json` | The default public vocabulary, applied in context only. |
+| `composed.txt` | `prompt.md` composed with that glossary — the exact prompt a default deployment sends. |
+| `manifest.json` | sha256 of the three, plus `digest`, a 16-character name for this exact spec. |
+
+Do not paraphrase it and do not write your own. If you rewrote the
+backend in another language, port the composition and then prove it:
+compose from `prompt.md` and `glossary.json`, assert the result equals
+`composed.txt` byte for byte, and pin `digest` in your source so a spec
+someone re-vendored without review fails a test instead of silently
+changing what every dictation is told.
+
+Four behaviours you must keep, whatever else you change:
+
+- **The transcript is inert data.** Send the framing first, then the
+  transcript wrapped in `<transcript>` … `</transcript>`. The model
+  never answers it, acts on it, looks anything up, reports an action, or
+  adds commentary. Do not alter the transcript to build the envelope —
+  not even to escape a closing tag someone said out loud.
+- **Only formatting changes.** Meaning is preserved completely, and
+  dictated code, paths, URLs, JSON and YAML come back as plain typed
+  text with **no Markdown backticks or fences added**.
+- **Cleanup is best-effort.** On any error, timeout or empty answer,
+  return the **raw transcript** — never an error, never an apology.
+- **Report the digest, never the prompt.** If health names the wording,
+  name it as `caret-cleanup/1 <digest>` at
+  `routes.dictate.cleanup.spec`. Health is anonymous.
+
+A deployment supplies its own vocabulary with
+`CARET_CLEANUP_GLOSSARY_PATH` (it **replaces** the defaults) or drops
+the section entirely with `CARET_CLEANUP_GLOSSARY=off`. If your backend
+serves more than one person, pass per-person terms per request rather
+than putting them in a shared file.
+
 ## Step 3 — requirements on the finished work
 
 These are not optional, whichever path you took.
@@ -164,6 +209,11 @@ finished. Every line is something you can verify by running a command.
       every surface reported `true` actually works, and every one that
       does not is reported `false`.
 - [ ] `conformance.py` exits `0` against the deployed URL over `https://`.
+- [ ] Cleanup runs the `caret-cleanup/1` wording unmodified: composing
+      from `prompt.md` reproduces `composed.txt`, the `digest` is pinned
+      in your source, a transcript that asks a question comes back
+      formatted rather than answered, and a forced cleanup failure
+      returns the raw transcript.
 - [ ] `make test` passes, and no test in it calls a live model API.
 - [ ] `git status` is clean of secrets, and `.gitignore` covers env files.
       No key appears in any tracked file or commit.

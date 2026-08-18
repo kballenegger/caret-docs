@@ -58,7 +58,15 @@ actually provides it:
   dictate-only backend: health says `"ask": false` and `/v2/ask`
   answers `404`. That is honest, not broken.
 - **Cleanup — optional.** The same agent, as a constrained text-only
-  cleanup request (no actions). With no agent, dictation returns the raw
+  cleanup request (no actions). What the model is told is the published
+  `caret-cleanup/1` spec that ships with the backend — see
+  <https://docs.typewithcaret.com/cleanup/>. The transcript arrives as
+  inert data inside a `<transcript>` envelope, meaning is preserved
+  completely, only formatting changes, and dictated code, paths and URLs
+  come back as plain text with no Markdown fences added. **Do not write
+  your own cleanup wording**; every preset sends the same spec, and
+  `/v2/health` names it by digest at `routes.dictate.cleanup.spec`. With
+  no agent — or on any cleanup failure — dictation returns the raw
   transcript.
 - **Imagine — optional.** `CARET_AGENT=grokbot` with
   `CARET_GROKBOT_IMAGE=on` serves it from GrokBot's own image
@@ -141,6 +149,13 @@ Rules that are not optional:
 - For Hermes, offer the documented toolset narrowing
   (`CARET_AGENT_COMMAND='hermes chat -q "{prompt}" -Q -t <toolset>'`)
   and let the user choose.
+- Cleanup vocabulary is optional and defaults to public Caret terms.
+  `CARET_CLEANUP_GLOSSARY=off` sends no glossary at all;
+  `CARET_CLEANUP_GLOSSARY_PATH=/path/to/glossary.json` **replaces** the
+  defaults with the user's own terms (copy the shipped
+  `spec/cleanup/v1/glossary.json` first if they want both). One file is
+  shared by everyone this backend serves, so keep anything private or
+  per-person out of it.
 
 ## Step 4 — validate before deploying
 
@@ -159,6 +174,11 @@ Health must show `"status": "ok"` and
 reality, and a `routes` block naming the chosen agent for Ask/cleanup
 and the resolved STT for dictation; the draft must come back from the
 real runtime. A request with a wrong key must get `401`.
+
+`routes.dictate.cleanup.spec` is the cleanup wording's digest — it
+should read `caret-cleanup/1 <16 hex characters>`. That string, not the
+prompt, is what you quote when reporting which wording is live. Health
+is anonymous: nothing secret goes in it.
 
 `"status": "not_ready"` means STT is missing — fix that before anything
 else; it is the one blocker you may not hand over. `"degraded"` means no

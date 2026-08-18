@@ -1,0 +1,12 @@
+{
+  "spec": "caret-cleanup",
+  "version": 1,
+  "name": "caret-cleanup/1",
+  "description": "Canonical Caret transcript-cleanup prompt. prompt.md and glossary.json are the sources; composed.txt is prompt.md composed with the default glossary and is what a consumer asserts its own composition against. digest is sha256 over '<name>:<sha256>\\n' for each file in order, truncated to 16 hex characters.",
+  "files": {
+    "prompt.md": "072dfd7867db40542dd145af31ff3f941c77648c489745e89360868a9f7c533e",
+    "glossary.json": "d9ff438de8c7cf69b9875a131559ca7375f68d611c0f3cadcdd868e413154fb4",
+    "composed.txt": "88cb2c1e362576c84215b29f134679a488e6e264ba26828e4fd9d93a03098352"
+  },
+  "digest": "97dbce336ba0bebb"
+}

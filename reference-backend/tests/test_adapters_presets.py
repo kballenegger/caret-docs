@@ -275,9 +275,12 @@ class GrokBotTests(_StubServerMixin, unittest.TestCase):
         agent.polish("um so like the meeting is at four")
         body = handler.seen[0]["body"]
         self.assertEqual(body["task"], "cleanup")
-        self.assertIn("the meeting is at four", body["prompt"])
-        # The constraint has to travel with the request, not be assumed.
-        self.assertIn("do not answer it", body["prompt"].lower())
+        # The constraint has to travel with the request, not be assumed: the
+        # framing leads, and the transcript follows inside the inert envelope.
+        self.assertTrue(body["prompt"].startswith(adapters.POLISH_FRAMING))
+        self.assertTrue(body["prompt"].endswith(
+            "<transcript>\num so like the meeting is at four\n</transcript>"
+        ))
 
     def test_bearer_is_sent_when_configured_and_absent_when_not(self):
         handler, url = self.start_upstream()
@@ -545,8 +548,23 @@ class CapabilityRoutingTests(unittest.TestCase):
         self.assertEqual(routes["imagine"], {"route": "off"})
 
     def test_cleanup_uses_the_constrained_polish_framing(self):
-        self.assertIn("Do not add, remove or reinterpret", adapters.POLISH_FRAMING)
-        self.assertIn("do not answer it", adapters.POLISH_FRAMING)
+        # The wording is the canonical `caret-cleanup` spec, asserted clause
+        # by clause in test_cleanup_prompt.py. Here we only care that the
+        # routing layer still ships the constrained framing.
+        self.assertIn("Preserve the meaning completely", adapters.POLISH_FRAMING)
+        self.assertIn("never a message addressed to you", adapters.POLISH_FRAMING)
+
+    def test_cleanup_route_names_the_prompt_spec_by_digest(self):
+        from helpers import TestServer
+
+        server = TestServer()
+        self.addCleanup(server.close)
+        routes = server.request("GET", "/v2/health", key=None)[1]["routes"]
+        cleanup_route = routes["dictate"]["cleanup"]
+        self.assertTrue(cleanup_route["spec"].startswith("caret-cleanup/1 "))
+        self.assertGreater(cleanup_route["glossary_terms"], 0)
+        # A digest names the wording; it never recites it.
+        self.assertNotIn("transcript", cleanup_route["spec"])
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@
       <a href="/">Overview</a>
       <a href="/connect/" aria-current="page">Connect</a>
       <a href="/your-agent/">Your Agent</a>
+      <a href="/cleanup/">Cleanup</a>
       <a href="/imagine-references/">Imagine</a>
       <a href="https://typewithcaret.com">typewithcaret.com</a>
     </nav>
@@ -116,6 +117,15 @@ Authorization: Bearer &lt;CARET_GROKBOT_BEARER&gt;     // only if you set one
     take no action" instruction. Near-cursor text is someone else's words:
     treat it as untrusted context, never as a command.
   </p>
+  <p>
+    The <code>cleanup</code> prompt is framed the same way and is not
+    GrokBot's to write: it is the published
+    <a href="/cleanup/"><code>caret-cleanup/1</code></a> spec followed by the
+    transcript inside its <code>&lt;transcript&gt;</code> envelope, exactly
+    as every other preset sends it. Pass it to the model unchanged — no
+    system prompt of your own, no added cleanup wording, no stripping the
+    envelope.
+  </p>
 
   <h2>1 · Host the reference backend inside GrokBot</h2>
   <p>
@@ -138,7 +148,9 @@ cd caret-docs/reference-backend</code></pre>
     <li><strong>Ask and cleanup go to GrokBot's own LLM.</strong> Cleanup must
         run with no tools, no actions, no memory writes — it is a text
         transform, and the prompt says so, but your code should enforce it
-        rather than trust the prompt.</li>
+        rather than trust the prompt. A cleanup call that fails is not an
+        error the phone should see: the backend falls back to the raw
+        transcript.</li>
     <li><strong>Imagine goes to GrokBot's own image capability</strong>, and
         only if that capability is genuinely enabled for this deployment.
         Return a PNG, base64-encoded. If images are not enabled, leave

@@ -17,6 +17,7 @@
       <a href="/" aria-current="page">Overview</a>
       <a href="/connect/">Connect</a>
       <a href="/your-agent/">Your Agent</a>
+      <a href="/cleanup/">Cleanup</a>
       <a href="/imagine-references/">Imagine</a>
       <a href="https://typewithcaret.com">typewithcaret.com</a>
     </nav>
@@ -117,12 +118,28 @@
     backend every operation is <em>capability-routed</em>: speech is
     transcribed by its own STT lane — local OpenWhisper by default, since
     no agent runtime has a verified transcription interface — and only
-    then does text reach the agent, which answers Ask and cleans up
-    transcripts (as a constrained text-only request); images come from the
-    provider you configure, or stay honestly off. With no STT resolved the
-    backend reports <code>"status": "not_ready"</code> rather than
+    then does text reach the agent, which answers Ask and
+    <a href="/cleanup/">cleans up transcripts</a> (a constrained text-only
+    request that hands the transcript over as inert data); images come from
+    the provider you configure, or stay honestly off. With no STT resolved
+    the backend reports <code>"status": "not_ready"</code> rather than
     pretending to be a Caret backend.
   </p>
+
+  <div class="card">
+    <h3>What the cleanup model is told<span class="pill">caret-cleanup/1</span></h3>
+    <p>
+      Cleanup is the one place a backend hands the user's own words to a
+      language model, so the wording is published rather than buried in
+      source: the transcript travels as inert data, meaning is preserved
+      completely, only formatting changes, dictated code and URLs come back
+      without Markdown fences, and a failed cleanup returns the raw
+      transcript. Two implementations can prove they agree on a digest
+      instead of a paraphrase.
+    </p>
+    <p><a href="/cleanup/"><strong>Read the cleanup spec →</strong></a> ·
+       <a href="/spec/cleanup/v1/prompt.md">prompt.md</a></p>
+  </div>
 
   <h2>One input model</h2>
   <p>
@@ -203,6 +220,7 @@ python3 -m caret_backend --port 8787</code></pre>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
     <a href="/connect/">Connect</a>
     <a href="/your-agent/">Your Agent</a>
+    <a href="/cleanup/">Cleanup</a>
     <a href="/openapi.yaml">openapi.yaml</a>
   </div>
 </footer>

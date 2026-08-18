@@ -17,6 +17,7 @@
       <a href="/">Overview</a>
       <a href="/connect/" aria-current="page">Connect</a>
       <a href="/your-agent/">Your Agent</a>
+      <a href="/cleanup/">Cleanup</a>
       <a href="/imagine-references/">Imagine</a>
       <a href="https://typewithcaret.com">typewithcaret.com</a>
     </nav>
@@ -200,10 +201,15 @@ python3 -m caret_backend --port 8787        # run</code></pre>
       <td><strong>Transcript cleanup</strong></td>
       <td>Optional</td>
       <td>Your selected agent, as a constrained text-only cleanup request —
-          fix the transcript, do not answer it, take no action. The CLI
-          presets run in their read-only modes, so "no action tools" is
-          enforced where the runtime can enforce it. With no agent, cleanup
-          is off and Dictate returns the raw transcript.</td>
+          format the transcript, do not answer it, take no action. The
+          wording is the published
+          <a href="/cleanup/"><code>caret-cleanup/1</code></a> spec, the same
+          for every preset: the transcript arrives as inert data, meaning is
+          preserved, only formatting changes. The CLI presets also run in
+          their read-only modes, so "no action tools" is enforced where the
+          runtime can enforce it. With no agent, cleanup is off and Dictate
+          returns the raw transcript — as it does whenever a cleanup call
+          fails.</td>
     </tr>
     <tr>
       <td><strong>Imagine</strong></td>
@@ -402,13 +408,15 @@ dCIsInUiOiJodHRwczovL2FnZW50LmV4YW1wbGUuY29tIn0</code></pre>
         (<code>--dangerously-skip-permissions</code>,
         <code>danger-full-access</code>, …). It never enables tool actions,
         arbitrary shell execution, or background work on the agent's side.</li>
-    <li><strong>A prompt is not a sandbox.</strong> The drafting and cleanup
-        prompts tell the agent it is writing text, not acting — but for
-        runtimes whose restriction flags are advisory (Hermes toolsets follow
-        <em>your</em> profile), the runbook shows the documented way to
-        narrow them, and recommends running the backend as a dedicated
-        low-privilege user with its own agent profile. That recommendation is
-        the default posture, not an extra.</li>
+    <li><strong>A prompt is not a sandbox.</strong> The drafting and
+        <a href="/cleanup/">cleanup</a> prompts tell the agent it is writing
+        text, not acting, and cleanup goes further by delivering the
+        transcript as inert data inside a <code>&lt;transcript&gt;</code>
+        envelope — but for runtimes whose restriction flags are advisory
+        (Hermes toolsets follow <em>your</em> profile), the runbook shows the
+        documented way to narrow them, and recommends running the backend as
+        a dedicated low-privilege user with its own agent profile. That
+        recommendation is the default posture, not an extra.</li>
     <li><strong>Audio stays local by default.</strong> The default STT is
         OpenWhisper on the machine running the backend: recordings never
         leave it, and chunks are deleted as soon as a session produces its

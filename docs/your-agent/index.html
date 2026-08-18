@@ -17,6 +17,7 @@
       <a href="/">Overview</a>
       <a href="/connect/">Connect</a>
       <a href="/your-agent/" aria-current="page">Your Agent</a>
+      <a href="/cleanup/">Cleanup</a>
       <a href="/imagine-references/">Imagine</a>
       <a href="https://typewithcaret.com">typewithcaret.com</a>
     </nav>
@@ -152,6 +153,14 @@
         <code>"session"</code>. List only <code>["text"]</code> for an
         operation, or an empty array, and the keyboard will not offer its
         microphone there.</li>
+    <li><code>routes</code> is optional and free-form: a place to describe
+        <em>how</em> you serve each operation, for operators rather than for
+        the keyboard. The reference backend uses it to name the cleanup
+        wording it runs, by digest —
+        <code>"routes": {"dictate": {"cleanup": {"spec":
+        "caret-cleanup/1 97dbce336ba0bebb", "glossary_terms": 12}}}</code>.
+        Publish the digest, never the prompt, and never anything secret:
+        health is anonymous. See <a href="/cleanup/">the cleanup spec</a>.</li>
   </ul>
 
   <h2>2 · One input model</h2>
@@ -173,7 +182,7 @@
     <tr><td><code>session_id</code></td><td>string</td><td>Session only. An audio session you have already accepted chunks for.</td></tr>
     <tr><td><code>client_chunk_count</code></td><td>integer ≥ 1</td><td>Session only, required. How many chunks the client uploaded — the completeness check.</td></tr>
     <tr><td><code>client_total_duration_ms</code></td><td>integer ≥ 1</td><td>Session only, required. The client's own measure, advisory.</td></tr>
-    <tr><td><code>polish</code></td><td>boolean</td><td>Session only, default <code>true</code>. Run transcript cleanup after STT; <code>false</code> keeps the raw transcript.</td></tr>
+    <tr><td><code>polish</code></td><td>boolean</td><td>Session only, default <code>true</code>. Run <a href="/cleanup/">transcript cleanup</a> after STT; <code>false</code> keeps the raw transcript.</td></tr>
   </table>
 
   <h2>3 · Dictate — required</h2>
@@ -187,6 +196,17 @@
     <code>client_request_id</code>. A deployment that cannot transcribe
     answers <code>404 not_found</code>, reports
     <code>"dictate": false</code>, and is <code>not_ready</code>.
+  </p>
+  <p>
+    Cleanup itself is specified separately, as data:
+    <a href="/cleanup/"><code>caret-cleanup/1</code></a>. The short version
+    is that the transcript is handed to the model as inert data inside a
+    <code>&lt;transcript&gt;</code> envelope, meaning is preserved
+    completely, only formatting changes, dictated code and URLs come back as
+    plain text with no Markdown fences added — and any cleanup failure
+    returns the <strong>raw transcript</strong> rather than an error. If you
+    publish which wording you run, publish the spec digest, never the
+    prompt.
   </p>
   <pre><code>// request
 {
@@ -674,6 +694,7 @@ export CARET_IMAGE_COMMAND='my-image-tool --prompt {prompt} --out {out}'</code><
     <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
     <a href="/">Overview</a>
+    <a href="/cleanup/">Cleanup spec</a>
     <a href="/openapi.yaml">openapi.yaml</a>
   </div>
 </footer>

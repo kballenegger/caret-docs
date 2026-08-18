@@ -342,6 +342,47 @@ paths:
         session. A deployment without transcription support answers
         `404 not_found` and reports `capabilities.dictate: false` — such a
         deployment is `not_ready`, because Dictate is mandatory.
+
+        **What cleanup does.** The transcript reaches the model as inert
+        data, wrapped in `<transcript>` … `</transcript>` and never
+        interpolated into the instructions: whatever the speaker said, it
+        is text to format and never a message addressed to the model. The
+        pass never answers a question in the transcript, never carries out
+        an instruction in it, never runs, browses or looks anything up,
+        never reports an action, and never adds a preface or comment.
+        Meaning is preserved completely — nothing added, removed,
+        summarized, expanded, reinterpreted, re-toned, translated, or
+        rewritten into corporate prose — and wording the STT engine was
+        unsure about is kept as transcribed.
+
+        Only formatting changes: filler and false starts are removed,
+        unambiguous STT errors are corrected, punctuation, capitalization
+        and paragraphs are added, dictated lists become real lists,
+        numbers become digits where digits are the written norm, technical
+        abbreviations stay abbreviated, and spoken punctuation or layout
+        words ("period", "new paragraph", "slash") convert only when they
+        are unambiguously an instruction. Code, commands, paths,
+        identifiers, URLs, JSON and YAML come back as plain typed text
+        with exact characters — cleanup never adds Markdown backticks or
+        fenced code blocks the speaker did not dictate. The result is the
+        formatted dictated text and nothing else.
+
+        A deployment may configure a **glossary** of canonical spellings
+        for terms its speakers use. It biases spelling in context only: an
+        entry applies when the surrounding words clearly refer to that
+        term, never as a find-and-replace, and never by inserting a term
+        the speaker did not say.
+
+        **Cleanup is best-effort.** If the model errors, times out, or
+        returns nothing, Dictate returns the **raw transcript** unchanged
+        rather than failing the request.
+
+        The exact wording is published as versioned, hashed data at
+        `/spec/cleanup/v1/`. `GET /v2/health` names the wording a
+        deployment runs by digest under `routes.dictate.cleanup.spec`
+        (for example `caret-cleanup/1 97dbce336ba0bebb`), so two
+        implementations can be compared without either one disclosing a
+        prompt.
       parameters:
         - $ref: "#/components/parameters/CaretClient"
       requestBody:
@@ -1424,6 +1465,36 @@ components:
                 dictate: [text, session]
                 ask: [text, session]
                 imagine: [text, session]
+        routes:
+          type: object
+          description: |
+            **Optional extension.** How each operation is actually served,
+            for operators debugging a deployment. Clients read
+            `capabilities`, not this. Keys mirror the operations; each
+            value carries at least a `route` (`agent`, `local`, or `off`)
+            and, where relevant, the provider name.
+
+            The `dictate` entry may carry a nested `cleanup` object
+            describing the transcript cleanup pass. `spec` names the
+            wording by digest — `<spec>/<version> <16 hex>` — never by
+            reciting it. Two deployments reporting the same `spec` string
+            send the same system prompt; the published sources for the
+            digest live at `/spec/cleanup/v1/`. `glossary_terms` is the
+            number of canonical spellings configured, a count only: the
+            terms themselves are never disclosed on a health probe.
+          additionalProperties: true
+          example:
+            dictate:
+              route: local
+              provider: openwhisper
+              cleanup:
+                route: agent
+                provider: hermes
+                constrained: true
+                spec: "caret-cleanup/1 97dbce336ba0bebb"
+                glossary_terms: 12
+            ask: { route: agent, provider: hermes }
+            imagine: { route: "off" }
         request_id:
           type: string
 
@@ -1569,7 +1640,10 @@ components:
           default: true
           description: |
             Run transcript cleanup after STT. `false` returns/uses the raw
-            transcript.
+            transcript. Cleanup formats the words the speaker said and
+            never acts on them; see the `dictate` operation for the full
+            behaviour. Cleanup failure is not request failure — the raw
+            transcript comes back either way.
 
     Input:
       description: The user's input. Exactly one of the two shapes.

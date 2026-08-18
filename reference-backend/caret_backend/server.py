@@ -25,6 +25,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from . import adapters, pairing
+from . import cleanup as cleanup_spec
 from .errors import (
     CaretError,
     bad_request,
@@ -134,6 +135,7 @@ class Backend:
         image_generator=None,
         api_keys: tuple[str, ...] = (),
         polish_enabled: bool = True,
+        cleanup_glossary: list[dict] | None = None,
         pairing_enabled: bool = True,
         rate_limit_per_minute: int = 120,
         run_jobs_inline: bool = False,
@@ -144,6 +146,14 @@ class Backend:
         self.image_generator = image_generator
         self.api_keys = tuple(api_keys)
         self.polish_enabled = polish_enabled
+        # Health reports how many glossary terms cleanup runs with. The
+        # prompt itself lives on the adapter (`cleanup_framing`); this is
+        # only the count, so an operator can tell "my glossary loaded"
+        # from "my glossary silently did not" without dumping vocabulary
+        # onto an anonymous endpoint.
+        self.cleanup_glossary = (
+            cleanup_spec.load_glossary() if cleanup_glossary is None else list(cleanup_glossary)
+        )
         self.pairing_enabled = pairing_enabled
         self.pairing = pairing.PairingRegistry()
         self.limiter = RateLimiter(rate_limit_per_minute)
@@ -298,10 +308,22 @@ class Backend:
         `dictate` folds the whole Dictate pipeline into one entry: the STT
         lane that hears the audio, and the constrained `cleanup` pass the
         agent runs over the transcript (or over text input) before it is
-        returned."""
+        returned.
+
+        The cleanup entry names the prompt spec by digest
+        (`caret-cleanup/1 <digest>`), never by content. That is enough for
+        an operator — or a support conversation — to confirm which wording
+        a running backend is using without the health endpoint reciting a
+        prompt at anyone."""
         agent_name = getattr(self.agent, "name", "?")
         cleanup = (
-            {"route": "agent", "provider": agent_name, "constrained": True}
+            {
+                "route": "agent",
+                "provider": agent_name,
+                "constrained": True,
+                "spec": cleanup_spec.spec_id(),
+                "glossary_terms": len(self.cleanup_glossary),
+            }
             if self.cleanup_available
             else {"route": "off"}
         )
@@ -1184,6 +1206,18 @@ def backend_from_env(env: dict[str, str] | None = None) -> Backend:
     # image resolvers prefer it for their operation when — and only when —
     # its adapter verifiably provides that capability (see adapters.py).
     agent = adapters.agent_from_env(env)
+    # Validated here too: with `CARET_AGENT=off` there is no adapter to
+    # carry the framing, and a broken glossary file should still be a
+    # startup error rather than a silent nothing.
+    try:
+        glossary = cleanup_spec.glossary_from_env(env)
+    except cleanup_spec.SpecError as exc:
+        raise CaretError(
+            500,
+            "internal_error",
+            f"transcript cleanup glossary is unusable: {exc}",
+            retryable=False,
+        )
     return Backend(
         store=store,
         agent=agent,
@@ -1191,6 +1225,7 @@ def backend_from_env(env: dict[str, str] | None = None) -> Backend:
         image_generator=adapters.image_generator_from_env(env, agent=agent),
         api_keys=keys,
         polish_enabled=env.get("CARET_POLISH", "on") != "off",
+        cleanup_glossary=glossary,
         pairing_enabled=env.get("CARET_PAIRING", "on") != "off",
         rate_limit_per_minute=int(env.get("CARET_RATE_LIMIT_PER_MINUTE", "120")),
     )
