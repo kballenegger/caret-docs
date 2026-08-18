@@ -25,6 +25,13 @@ Note the license before you start: the repository is source-available,
 not open source — using, copying and adapting it to connect Caret is
 exactly what it permits.
 
+## Provider runbooks
+
+Before configuring a provider, read its short provider runbook as well as
+this prompt. It gives provider-specific defaults and integration steps.
+
+- **GrokBot:** [connect-grok.md](https://docs.typewithcaret.com/agent-prompts/connect-grok.md)
+
 ## How the backend routes capabilities — set expectations first
 
 One unified backend, one adapter per capability, each routed to what
