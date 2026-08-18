@@ -17,6 +17,7 @@
       <a href="/">Overview</a>
       <a href="/connect/">Connect</a>
       <a href="/your-agent/" aria-current="page">Your Agent</a>
+      <a href="/imagine-references/">Imagine</a>
       <a href="https://typewithcaret.com">typewithcaret.com</a>
     </nav>
   </div>
@@ -378,6 +379,11 @@ Retry-After: 3
     describe the bytes you are actually delivering. Return the image as
     <code>inline_base64</code>, or as a <code>data_url</code>, or as a URL the
     client can fetch — pick one.
+  </p>
+  <p>
+    Generating the <em>same</em> person, pet, or object across many prompts is
+    a backend behavior on top of this endpoint, not a contract change:
+    see <a href="/imagine-references/">repeatable Imagine references</a>.
   </p>
 
   <h2>6 · Idempotency</h2>

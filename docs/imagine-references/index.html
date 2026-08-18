@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Imagine with saved references — the same person, every time</title>
+<meta name="description" content="How to make Caret Imagine generate the same person, pet, or object repeatably: collect good reference photos, build one reference sheet per subject, and resolve references only when the user names them.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <img src="/assets/caret-mark.svg" alt="Caret mark">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/connect/">Connect</a>
+      <a href="/your-agent/">Your Agent</a>
+      <a href="/imagine-references/" aria-current="page">Imagine</a>
+      <a href="https://typewithcaret.com">typewithcaret.com</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="note">
+    <strong>This page is an implementation prompt</strong>
+    <p style="margin:0.4rem 0 0">
+      It is written to be handed to your coding agent as-is — point it at
+      <code>https://docs.typewithcaret.com/imagine-references/</code> and ask
+      it to implement the two behaviors below in your backend. Nothing here is
+      specific to a language, an image model, or a storage engine.
+    </p>
+  </div>
+
+  <p class="kicker">Caret Imagine · backend behavior</p>
+  <h1>Generate the same person twice.</h1>
+  <p class="lead">
+    Ask an image model for “my sister at the beach” and you get a stranger —
+    a different stranger every time. Identity is not something a text prompt
+    can carry. The fix is boring and it works: collect real photographs of the
+    people and things you care about, distil each subject into one
+    <strong>reference sheet</strong>, and pass that sheet to the image model
+    whenever the user names that subject.
+  </p>
+
+  <p>
+    <strong>Imagine</strong> is the Caret surface where this belongs.
+    The keyboard sends a prompt to
+    <a href="/your-agent/"><code>POST /v1/imagine</code></a> and expects one
+    image back; everything between those two points is yours. References are
+    entirely a backend behavior — the contract does not change, no new
+    endpoint appears, and a backend without references stays perfectly valid.
+  </p>
+
+  <h2>What you are building</h2>
+  <p>Two behaviors, and they are separate on purpose.</p>
+  <div class="card">
+    <h3>1 · Setup, once per subject<span class="pill">manual</span></h3>
+    <p>
+      The user gathers 8–15 clean photographs of a person, pet, or object and
+      gives it a name. You generate <strong>one reference sheet</strong> from
+      that set, show it to the user for approval, and store it under that name.
+      This happens deliberately, not in the middle of a generation.
+    </p>
+  </div>
+  <div class="card">
+    <h3>2 · Generation, every time<span class="pill">automatic</span></h3>
+    <p>
+      When an Imagine prompt <em>names</em> a saved reference, resolve the name,
+      pass that subject’s sheet to the image model as a reference image, and say
+      which references you applied. When the prompt names none, use none.
+      <strong>Never apply a reference the user did not name.</strong>
+    </p>
+  </div>
+
+  <h2>1 · Collect the source photos</h2>
+  <p>
+    Aim for <strong>8–15 photographs</strong> per subject. Fewer than eight and
+    the sheet starts inventing; more than fifteen mostly adds redundancy and
+    cost. Cover this spread:
+  </p>
+  <ul>
+    <li><strong>Angles.</strong> Straight-on front, left three-quarter, right
+        three-quarter, and at least one true profile. The three-quarter and
+        profile shots are what teach the model the shape of a nose, a jaw, a
+        brow — the parts a front photo flattens away.</li>
+    <li><strong>Expressions.</strong> Neutral, smiling, and serious. A face at
+        rest and a face in motion are different faces; give it both.</li>
+    <li><strong>1–2 full-body shots</strong>, standing, whole figure in frame.
+        This is what fixes height, build, and proportion.</li>
+    <li><strong>2–3 different outfits</strong>, so the model learns the person
+        rather than the sweater. A set shot in one afternoon produces a
+        reference sheet that can only draw that afternoon.</li>
+    <li><strong>Relevant detail shots.</strong> Anything a stranger would need
+        pointed out: glasses they always wear, a tattoo, a scar, a distinctive
+        hairline, freckles, a piece of jewellery that is part of the person.</li>
+  </ul>
+
+  <div class="note">
+    <strong>One front photo is not enough</strong>
+    <p style="margin:0.4rem 0 0">
+      A single frontal portrait contains no information about profile, head
+      depth, or how the face behaves at an angle — so the model fills those in,
+      differently each run. The result looks right in thumbnails and wrong to
+      anyone who knows the person. If you have exactly one usable photo, say
+      so plainly and treat the output as a likeness, not the person.
+    </p>
+  </div>
+
+  <h2>2 · Quality rules for the source photos</h2>
+  <p>The set is the ceiling on everything downstream. Reject:</p>
+  <ul>
+    <li>Anything soft, blurry, or motion-smeared. Sharp and in focus, always.</li>
+    <li>Bad light — harsh shadow across the face, blown-out highlights,
+        heavy backlight, extreme colour casts. Even, natural light wins.</li>
+    <li>Sunglasses, masks, hands, hair, or hats covering the face. One or two
+        shots <em>with</em> everyday glasses are useful; a set shot entirely
+        in sunglasses is not.</li>
+    <li>Beauty filters, smoothing, heavy retouching, and stylised presets. They
+        teach the model a face that does not exist.</li>
+    <li>Group shots and anything with a second face in frame — the model cannot
+        know which person you mean. Crop tightly to one subject per photo.</li>
+    <li>Tiny faces. If the head is a small fraction of the frame, there is no
+        detail to work with. Use the highest resolution originals you have, not
+        screenshots or re-compressed copies from a chat thread.</li>
+  </ul>
+  <p>
+    And keep the set from <strong>one era</strong>. Photographs spanning a
+    decade, a major weight change, or four hairstyles average into someone who
+    is nobody. Pick the current era and stay in it. Vary background and setting
+    across the set, but not the person.
+  </p>
+
+  <h2>3 · Generate one reference sheet per subject</h2>
+  <p>
+    Feed the whole approved set to your image model and produce a single
+    image: <strong>six large panels</strong> in a clean grid, one subject,
+    consistent identity across every panel.
+  </p>
+  <table>
+    <tr><th>Panel</th><th>What it shows</th></tr>
+    <tr><td>1</td><td>Front, head and shoulders, neutral expression, eyes to camera</td></tr>
+    <tr><td>2</td><td>Left three-quarter view</td></tr>
+    <tr><td>3</td><td>Right three-quarter view</td></tr>
+    <tr><td>4</td><td>Full profile, 90°</td></tr>
+    <tr><td>5</td><td>Natural expression — a relaxed, characteristic smile</td></tr>
+    <tr><td>6</td><td>Full body, standing, neutral pose, whole figure in frame</td></tr>
+  </table>
+  <p>Non-negotiable properties of the sheet:</p>
+  <ul>
+    <li><strong>Large panels.</strong> Six panels, not twelve. Each one must
+        carry real facial detail at full resolution — a contact sheet of
+        thumbnails is useless as a reference.</li>
+    <li><strong>Plain studio background</strong>, neutral light grey or white,
+        the same in every panel, with even, soft, consistent lighting. The
+        background is not the subject and must not be learned as part of it.</li>
+    <li><strong>No labels, captions, numbers, watermarks, or text of any kind.</strong>
+        Image models read text in a reference image as content and leak it
+        into the pictures you generate later.</li>
+    <li><strong>One outfit and one grade.</strong> Same clothing, same colour
+        treatment across all six panels, so the only thing the sheet asserts
+        is the subject.</li>
+  </ul>
+  <p>
+    Show the sheet to the user before you save it. If a panel is off — wrong
+    nose in profile, a face that drifts between panels — fix the source set
+    and regenerate. A bad sheet is worse than no sheet, because it is
+    <em>consistently</em> wrong.
+  </p>
+
+  <h2>4 · Store it under a clear name</h2>
+  <p>
+    One directory per subject, holding the approved sheet, the originals it was
+    built from, and a small metadata record. Any store works — this shape is
+    the point, not the filesystem.
+  </p>
+  <pre><code>references/
+  ada/
+    sheet.png          the approved six-panel sheet — the only thing sent to the model
+    sources/           the originals, kept so the sheet can be rebuilt
+    meta.json</code></pre>
+  <pre><code>{
+  "name": "ada",
+  "kind": "person",
+  "aliases": ["ada b", "my sister", "my sister ada"],
+  "sheet": "sheet.png",
+  "source_count": 12,
+  "created": "2026-08-18",
+  "refreshed": "2026-08-18",
+  "consent": "asked and given, 2026-08-17",
+  "notes": "round tortoiseshell glasses, always"
+}</code></pre>
+  <p>
+    Names are how the user reaches a reference, so make them
+    <strong>unambiguous and predictable</strong>: short, lowercase, one
+    subject each. Record the aliases the user actually says out loud —
+    “my sister”, “the dog”, “my green mug” — because that is what will be in
+    the prompt. Refuse a new name that collides with an existing one or with
+    a common noun that will match by accident: a reference named
+    <code>cat</code> will hijack every prompt containing the word cat.
+  </p>
+
+  <h2>5 · Generation behavior</h2>
+  <p>On each Imagine request, in this order:</p>
+  <ol>
+    <li><strong>Scan the prompt for saved names and aliases.</strong>
+        Case-insensitive, whole words only, longest match first so
+        “my sister ada” does not resolve twice.</li>
+    <li><strong>No match → no reference.</strong> Generate exactly what was
+        asked for, with no reference image attached. This is the common case
+        and it must stay fast and unsurprising.</li>
+    <li><strong>Match → attach that subject’s sheet</strong> as an image
+        reference to the model call, alongside the user’s prompt.</li>
+    <li><strong>Several matches → attach each sheet</strong> if your model
+        accepts multiple reference images. If it accepts one, ask the user
+        which subject leads rather than silently picking.</li>
+    <li><strong>Say what you used.</strong> Report the applied references back
+        to the user — in the response text, a log line, or both. A reference
+        that is applied invisibly is indistinguishable from a model that has
+        started hallucinating someone the user knows.</li>
+  </ol>
+
+  <div class="note">
+    <strong>Never apply a reference the user did not name</strong>
+    <p style="margin:0.4rem 0 0">
+      No “most recently used” default, no “this prompt says <em>my dog</em> so
+      it probably means Biscuit”, no auto-attaching the only reference on file.
+      A prompt that says “a woman reading on a train” means a woman, not the
+      user’s sister. Silently inserting a real, identifiable person into an
+      image nobody asked to put them in is the single worst failure this
+      feature has, and it is entirely avoidable: match on names, or use nothing.
+    </p>
+  </div>
+
+  <p>
+    Two prompt-craft rules once a sheet is attached. Refer to the subject by
+    role — “the person in the reference image” — rather than re-describing
+    their face in words; a text description of a face competes with the
+    reference and the model splits the difference. And keep the rest of the
+    prompt about the scene: pose, setting, light, style. The sheet handles
+    identity, the prompt handles everything else.
+  </p>
+  <pre><code>prompt:     "the person in the reference image, sitting on a harbour wall
+             at golden hour, 35mm, shallow depth of field"
+references: [references/ada/sheet.png]
+applied:    ada</code></pre>
+  <p>
+    If a subject is named but no sheet exists yet, do not improvise one
+    mid-generation. Generate without it and tell the user the reference is
+    missing, or offer to run setup — that is a deliberate, consented step,
+    not something to do while they wait for a picture.
+  </p>
+
+  <h2>6 · Pets, objects, and places</h2>
+  <p>
+    The workflow is identical for anything you need to draw repeatably; only
+    the six panels change.
+  </p>
+  <ul>
+    <li><strong>Pets.</strong> Front, both three-quarters, profile, a natural
+        standing pose, and full body. Detail shots of markings, a torn ear, a
+        collar. Coat patterns are the identity here — get them sharp.</li>
+    <li><strong>Objects.</strong> Front, back, both sides, top, and one detail
+        shot of whatever makes this one yours: a chip in the glaze, a logo, a
+        strap wear pattern. Include a scale cue if size matters.</li>
+    <li><strong>Places and rooms.</strong> Wide shot from each corner plus the
+        details that define it. Expect less fidelity than faces or objects;
+        rooms drift more, and it is honest to say so.</li>
+  </ul>
+  <p>
+    Naming, resolution, and “only when named” are exactly the same. Consent is
+    the part that does not apply — a mug cannot object to being drawn.
+  </p>
+
+  <h2>7 · Consent, access, and privacy</h2>
+  <p>
+    A reference library is a folder of biometric-grade portraits of people who
+    are not in the room when the images get generated. Treat it that way.
+  </p>
+  <ul>
+    <li><strong>Ask first.</strong> Store a person’s reference only with that
+        person’s agreement — for friends, family, and colleagues alike, not
+        just public figures. Record when consent was given, and honour a
+        withdrawal by deleting the sheet, the sources, and the metadata
+        together.</li>
+    <li><strong>Children are a higher bar.</strong> A parent’s consent, a
+        narrow purpose, and a short retention window — or skip it.</li>
+    <li><strong>One owner per library.</strong> References belong to the person
+        who created them. Do not share a library across users, do not let one
+        user resolve another user’s names, and scope every lookup to the
+        calling identity. On a multi-user backend this is an access-control
+        boundary, not a convention.</li>
+    <li><strong>Least exposure at rest.</strong> Keep the library outside your
+        source repository and out of backups that travel further than the
+        subjects agreed to. Restrict file permissions to the service account
+        that serves Imagine. Never log the images or their contents.</li>
+    <li><strong>Deletion has to be one step.</strong> “Forget Ada” must remove
+        the sheet, every source photo, the metadata, and any cached model
+        input — not just unlink the name.</li>
+  </ul>
+  <p>
+    Reference uploads and model inputs must be handled according to the
+    privacy controls of the product you are building — the same rules that
+    govern any other user content it processes. Be concrete with the user
+    about where the sheet goes: if your image model is a remote API, that
+    person’s face leaves the machine on every single generation that names
+    them, and the provider’s retention terms apply to it. A local image model
+    keeps it on your hardware. Either is a legitimate choice; making it
+    without telling the user is not.
+  </p>
+
+  <h2>8 · Keep the sheets fresh</h2>
+  <p>
+    A reference sheet is a snapshot with an expiry date. New haircut, new
+    glasses, a beard, weight change, a child who grows visibly in six months —
+    the sheet keeps confidently producing last year’s person.
+  </p>
+  <ul>
+    <li>Re-shoot when the user says results have started looking wrong, and on
+        a schedule for anyone whose appearance moves quickly.</li>
+    <li>Refresh from a <em>new</em> set of photographs. Do not regenerate from
+        the old sheet — copies of copies drift, and the drift compounds
+        silently.</li>
+    <li>Keep the previous sheet until the replacement is approved, then delete
+        it. Two live sheets for one subject means two different people.</li>
+    <li>Store <code>refreshed</code> alongside <code>created</code>, and
+        surface the age of a sheet when the user asks what is in the library.</li>
+  </ul>
+
+  <h2>Done when</h2>
+  <ul>
+    <li>A named subject can be added end to end: photos in, sheet out, user
+        approves, name stored.</li>
+    <li>The same name, prompted three times in different scenes, produces
+        three images of recognisably the same subject.</li>
+    <li>A prompt that names nothing produces zero reference attachments —
+        verify this one deliberately, it is the rule most easily broken by a
+        helpful default.</li>
+    <li>Every generation reports which references it applied.</li>
+    <li>Deleting a subject leaves nothing behind on disk.</li>
+  </ul>
+
+  <p>
+    The contract side of Imagine — request shape, aspect ratio, quality,
+    idempotency, how to return the bytes — is on the
+    <a href="/your-agent/">implementation guide</a>. If you have not built a
+    backend yet, <a href="/connect/">connect the agent you already run</a>
+    first; references are something you add to a backend that already works.
+  </p>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="/">Overview</a>
+    <a href="/your-agent/">Implementation guide</a>
+  </div>
+</footer>
+</body>
+</html>
