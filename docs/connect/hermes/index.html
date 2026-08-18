@@ -114,8 +114,8 @@ export CARET_AGENT_COMMAND='hermes chat -q "{prompt}" -Q -t clarify -m gpt-5.2 -
   <h2>2 · Run it and smoke-test locally</h2>
   <pre><code>python3 -m caret_backend --port 8787 &amp;
 
-curl -s localhost:8787/v1/health | python3 -m json.tool
-curl -s -X POST localhost:8787/v1/draft \
+curl -s localhost:8787/v2/health | python3 -m json.tool
+curl -s -X POST localhost:8787/v2/ask \
   -H "Authorization: Bearer $CARET_API_KEYS" \
   -H 'Content-Type: application/json' \
   -d '{"client_request_id":"smoke-1",
@@ -197,14 +197,14 @@ caret.yourdomain.com {
     <tr><td>Drafts contain banner or spinner text</td>
         <td>Your command override lost <code>-Q</code>. Quiet mode is what
             keeps stdout answer-only.</td></tr>
-    <tr><td><code>504 draft_timeout</code></td>
+    <tr><td><code>504 ask_timeout</code></td>
         <td>Pin a faster model (above) or raise
             <code>CARET_AGENT_TIMEOUT_S</code>.</td></tr>
     <tr><td>Health says <code>"status": "not_ready"</code>, or no microphone
             in the keyboard</td>
         <td>No STT resolved, so this is not yet a valid Caret backend.
             Install OpenWhisper and restart, then check
-            <code>routes.dictation</code> and <code>readiness</code> in
+            <code>routes.dictate</code> and <code>readiness</code> in
             health.</td></tr>
   </table>
   <p>

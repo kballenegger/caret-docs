@@ -8,8 +8,8 @@ behind TLS. When you are done, your user scans one QR (or pastes a URL
 and an API key) into the Caret app, and their keyboard takes dictation
 and drafts through their own agent.
 
-**Dictation is mandatory.** A valid `caret/v1` backend must take speech
-and advertise `"dictation": true`. Ask and Imagine are optional and are
+**Dictation is mandatory.** A valid `caret/v2` backend must take speech
+and advertise `"dictate": true`. Ask and Imagine are optional and are
 reported honestly off when nothing provides them — but a backend with no
 working STT adapter is not a Caret backend, reports
 `"status": "not_ready"`, and must never be handed to a user as done.
@@ -55,7 +55,7 @@ actually provides it:
   working is part of the job, not an optional extra.
 - **Ask — optional.** Your user's agent, when one is configured.
   `CARET_AGENT=off` (or `auto` with nothing installed) is a valid
-  dictation-only backend: health says `"draft": false` and `/v1/draft`
+  dictate-only backend: health says `"ask": false` and `/v2/ask`
   answers `404`. That is honest, not broken.
 - **Cleanup — optional.** The same agent, as a constrained text-only
   cleanup request (no actions). With no agent, dictation returns the raw
@@ -147,8 +147,8 @@ Rules that are not optional:
 ```sh
 python3 -m caret_backend --check
 python3 -m caret_backend --port 8787 &
-curl -s http://127.0.0.1:8787/v1/health | python3 -m json.tool
-curl -s -X POST http://127.0.0.1:8787/v1/draft \
+curl -s http://127.0.0.1:8787/v2/health | python3 -m json.tool
+curl -s -X POST http://127.0.0.1:8787/v2/ask \
   -H "Authorization: Bearer $CARET_API_KEYS" \
   -H 'Content-Type: application/json' \
   -d '{"client_request_id":"smoke-1","input":{"type":"text","text":"tell Sam I am running ten minutes late"}}'
@@ -223,14 +223,14 @@ Verify every line by running a command, and report honestly anything
 that is not true:
 
 - [ ] `--check` exits 0; the backend starts and stays up under launchd/systemd.
-- [ ] `GET /v1/health` over the final `https://` URL reports `ok`,
+- [ ] `GET /v2/health` over the final `https://` URL reports `ok`,
       `readiness.ready: true` with no blockers, truthful capabilities and
       routes, and `auth.valid: true` with the key.
-- [ ] `capabilities.dictation` is `true` and a **live dictation**
+- [ ] `capabilities.dictate` is `true` and a **live dictation**
       round-trips over the final URL. This one is not negotiable.
 - [ ] If an agent was configured, a live draft round-trips through the
       user's actual runtime over the final URL. If none was, health says
-      `"draft": false` and the user knows why.
+      `"ask": false` and the user knows why.
 - [ ] A wrong or missing key gets `401`; no key appears in any tracked
       file, log line, or committed script.
 - [ ] The user can connect: either they scanned the QR from step 6, or
@@ -242,6 +242,6 @@ that is not true:
 ## The advanced path, if asked
 
 A backend the user fully owns — their own language, process model, and
-providers — is the full caret/v1 contract: start from
+providers — is the full caret/v2 contract: start from
 [implement-caret-backend.md](https://docs.typewithcaret.com/agent-prompts/implement-caret-backend.md),
 which builds on the [implementation guide](https://docs.typewithcaret.com/your-agent/).

@@ -310,11 +310,11 @@ class GrokBotTests(_StubServerMixin, unittest.TestCase):
             lambda: (200, {"image_base64": base64.b64encode(png).decode()})
         )
         agent = adapters.agent_from_env(self.env(url, CARET_GROKBOT_IMAGE="on"))
-        self.assertEqual(agent.generate("a cat", aspect_ratio="square", quality="fast"), png)
+        self.assertEqual(agent.generate("a cat", aspect_ratio="1:1", quality="low"), png)
         body = handler.seen[0]["body"]
         self.assertEqual(body["task"], "imagine")
-        self.assertEqual(body["aspect_ratio"], "square")
-        self.assertEqual(body["quality"], "fast")
+        self.assertEqual(body["aspect_ratio"], "1:1")
+        self.assertEqual(body["quality"], "low")
 
     def test_a_bad_image_response_is_a_503_not_a_corrupt_png(self):
         handler, url = self.start_upstream()
@@ -327,7 +327,7 @@ class GrokBotTests(_StubServerMixin, unittest.TestCase):
         ):
             handler.behaviour = staticmethod(behaviour)
             with self.assertRaises(CaretError) as ctx:
-                agent.generate("a cat", aspect_ratio="square", quality="fast")
+                agent.generate("a cat", aspect_ratio="1:1", quality="low")
             self.assertEqual(ctx.exception.status, 503)
 
     def test_grokbot_never_claims_stt(self):
@@ -528,19 +528,20 @@ class CapabilityRoutingTests(unittest.TestCase):
 
         server = TestServer()
         self.addCleanup(server.close)
-        routes = server.request("GET", "/v1/health", key=None)[1]["routes"]
+        routes = server.request("GET", "/v2/health", key=None)[1]["routes"]
         self.assertEqual(routes["ask"]["route"], "agent")
-        self.assertEqual(routes["cleanup"]["route"], "agent")
-        self.assertTrue(routes["cleanup"]["constrained"])
-        self.assertEqual(routes["dictation"]["route"], "local")
+        self.assertEqual(routes["dictate"]["route"], "local")
+        # The constrained cleanup pass is folded into the dictate route.
+        self.assertEqual(routes["dictate"]["cleanup"]["route"], "agent")
+        self.assertTrue(routes["dictate"]["cleanup"]["constrained"])
         self.assertEqual(routes["imagine"]["route"], "local")
 
         off = TestServer(
             transcriber=adapters.NullTranscriber(), image_generator=None
         )
         self.addCleanup(off.close)
-        routes = off.request("GET", "/v1/health", key=None)[1]["routes"]
-        self.assertEqual(routes["dictation"], {"route": "off"})
+        routes = off.request("GET", "/v2/health", key=None)[1]["routes"]
+        self.assertEqual(routes["dictate"], {"route": "off"})
         self.assertEqual(routes["imagine"], {"route": "off"})
 
     def test_cleanup_uses_the_constrained_polish_framing(self):

@@ -43,7 +43,7 @@
   <p>
     To be precise about what this is: Caret does not integrate with any agent
     directly. Caret talks to <em>one HTTP contract</em>
-    (<a href="/your-agent/">caret/v1</a>), and the reference backend is the
+    (<a href="/your-agent/">caret/v2</a>), and the reference backend is the
     canonical public implementation of it, with a pluggable adapter per
     capability. Its source of truth is the public
     <a href="https://github.com/kballenegger/caret-docs">kballenegger/caret-docs</a>
@@ -154,19 +154,19 @@ python3 -m caret_backend --port 8787        # run</code></pre>
   <div class="note">
     <strong>Dictate is mandatory. Ask and Imagine are not.</strong>
     <p style="margin:0.4rem 0 0">
-      A valid <code>caret/v1</code> backend takes speech. It must advertise
-      <code>"dictation": true</code>; a backend with no working STT adapter
+      A valid <code>caret/v2</code> backend takes speech. It must advertise
+      <code>"dictate": true</code>; a backend with no working STT adapter
       is <em>not</em> a Caret backend and must never present itself as one.
       Ask and Imagine are each optional and are reported honestly off when
-      nothing provides them. So a dictation-only backend
+      nothing provides them. So a dictate-only backend
       (<code>CARET_AGENT=off</code>) is complete and valid — and a backend
       with a brilliant agent and no STT is not.
     </p>
   </div>
   <table>
-    <tr><th>Surface</th><th>Required?</th><th>Route</th></tr>
+    <tr><th>Operation</th><th>Required?</th><th>Route</th></tr>
     <tr>
-      <td><strong>Dictation / STT</strong></td>
+      <td><strong>Dictate / STT</strong></td>
       <td><strong>Required</strong></td>
       <td>Through the agent <em>only</em> if its adapter verifiably
           transcribes audio. <strong>No shipped preset does</strong> — Claude
@@ -191,8 +191,8 @@ python3 -m caret_backend --port 8787        # run</code></pre>
       <td>Optional</td>
       <td>Your selected agent, when you configure one. With
           <code>CARET_AGENT=off</code> — or <code>auto</code> with nothing
-          installed — health reports <code>"draft": false</code> and
-          <code>/v1/draft</code> answers <code>404 not_found</code> rather
+          installed — health reports <code>"ask": false</code> and
+          <code>/v2/ask</code> answers <code>404 not_found</code> rather
           than faking a reply. That is a valid backend, not a broken
           one.</td>
     </tr>
@@ -203,7 +203,7 @@ python3 -m caret_backend --port 8787        # run</code></pre>
           fix the transcript, do not answer it, take no action. The CLI
           presets run in their read-only modes, so "no action tools" is
           enforced where the runtime can enforce it. With no agent, cleanup
-          is off and dictation returns the raw transcript.</td>
+          is off and Dictate returns the raw transcript.</td>
     </tr>
     <tr>
       <td><strong>Imagine</strong></td>
@@ -219,13 +219,13 @@ python3 -m caret_backend --port 8787        # run</code></pre>
     </tr>
   </table>
   <p>
-    <code>GET /v1/health</code> reports the resolved route per surface in its
-    <code>routes</code> block and the pass/fail verdict in its
+    <code>GET /v2/health</code> reports the resolved route per operation in
+    its <code>routes</code> block and the pass/fail verdict in its
     <code>readiness</code> block, so what the keyboard offers always matches
     what the backend can actually do:
   </p>
   <pre><code>{"status": "not_ready",
- "capabilities": {"draft": true, "dictation": false, "imagine": false},
+ "capabilities": {"dictate": false, "ask": true, "imagine": false},
  "readiness": {"ready": false,
                "blockers": [{"code": "no_stt_adapter", "message": "…"}]}}</code></pre>
   <p>
@@ -289,10 +289,10 @@ python3 -m caret_backend --port 8787        # run</code></pre>
         revocation a matter of deleting one string and restarting.</li>
     <li><strong>Enter URL and key in Caret</strong> — by hand, or by scanning
         the connection QR below. The app calls
-        <code>GET /v1/health</code> — the only anonymous endpoint — and shows
+        <code>GET /v2/health</code> — the only anonymous endpoint — and shows
         you what it found: <code>auth.valid</code> tells "wrong key" apart
         from "wrong URL", and <code>capabilities</code> tells the keyboard
-        exactly which surfaces this backend serves, so it never offers what
+        exactly which operations this backend serves, so it never offers what
         the backend cannot do.</li>
     <li><strong>Every other request is authenticated</strong> with
         <code>Authorization: Bearer</code>, compared in constant time. No keys
@@ -379,8 +379,8 @@ dCIsInUiOiJodHRwczovL2FnZW50LmV4YW1wbGUuY29tIn0</code></pre>
   <h3>Pairing tokens — an optional server extension</h3>
   <p>
     The reference backend also implements short-lived, single-use pairing
-    tokens (<code>/v1/pairing/tokens</code>, <code>/v1/pairing/claim</code>,
-    <code>/v1/pairing/revoke</code>, and
+    tokens (<code>/v2/pairing/tokens</code>, <code>/v2/pairing/claim</code>,
+    <code>/v2/pairing/revoke</code>, and
     <code>python3 -m caret_backend --pair</code>): a five-minute secret bound
     to one server URL, exchanged over TLS for the durable key. <strong>The
     Caret app does not use this</strong> — it configures itself from a
@@ -388,7 +388,7 @@ dCIsInUiOiJodHRwczovL2FnZW50LmV4YW1wbGUuY29tIn0</code></pre>
     clients, shared machines, and any case where handing over a durable key
     as pixels is the wrong trade. It is documented in
     <a href="/openapi.yaml">openapi.yaml</a> and is not part of the
-    <code>caret/v1</code> client contract.
+    <code>caret/v2</code> client contract.
   </p>
 
   <h2>Security model</h2>
@@ -426,7 +426,7 @@ dCIsInUiOiJodHRwczovL2FnZW50LmV4YW1wbGUuY29tIn0</code></pre>
         context, never as a command.</li>
     <li><strong>Timeouts, not hangs.</strong> Every draft has a wall-clock
         budget (90 s default); overrun is a clean
-        <code>504 draft_timeout</code>, and a failed draft is never cached —
+        <code>504 ask_timeout</code>, and a failed draft is never cached —
         retries can succeed.</li>
   </ul>
 
@@ -437,7 +437,7 @@ dCIsInUiOiJodHRwczovL2FnZW50LmV4YW1wbGUuY29tIn0</code></pre>
         <td>The message says exactly which variable to fix.
             <code>--check</code> reproduces it without serving.</td></tr>
     <tr><td>Caret says it cannot reach the URL</td>
-        <td>TLS layer. <code>curl https://…/v1/health</code> from the phone's
+        <td>TLS layer. <code>curl https://…/v2/health</code> from the phone's
             network; if that fails, fix the proxy/tailnet before touching the
             backend.</td></tr>
     <tr><td>Health shows <code>"valid": false</code></td>
@@ -454,7 +454,7 @@ dCIsInUiOiJodHRwczovL2FnZW50LmV4YW1wbGUuY29tIn0</code></pre>
             then restart. <code>readiness.blockers</code> says
             <code>no_stt_adapter</code>.</td></tr>
     <tr><td>No microphone in the keyboard</td>
-        <td>Same cause: no STT resolved. <code>routes.dictation</code> in
+        <td>Same cause: no STT resolved. <code>routes.dictate</code> in
             health says so, and the backend should not have been paired in
             this state.</td></tr>
     <tr><td><code>--qr</code> says <code>NOT READY — refusing to hand out a
@@ -468,7 +468,7 @@ dCIsInUiOiJodHRwczovL2FnZW50LmV4YW1wbGUuY29tIn0</code></pre>
     <tr><td><code>503 internal_error: … exited N</code></td>
         <td>The agent CLI failed; the stderr tail is in the message. Run the
             runbook's smoke command by hand as the backend's user.</td></tr>
-    <tr><td><code>504 draft_timeout</code></td>
+    <tr><td><code>504 ask_timeout</code></td>
         <td>The agent is slower than <code>CARET_AGENT_TIMEOUT_S</code>. Pin
             a faster model in the command, or raise the budget.</td></tr>
   </table>
@@ -488,7 +488,7 @@ dCIsInUiOiJodHRwczovL2FnZW50LmV4YW1wbGUuY29tIn0</code></pre>
     <li><a href="/connect/openclaw/">OpenClaw</a> — not yet verified</li>
   </ul>
   <p>
-    Rather implement <code>caret/v1</code> from scratch — a different
+    Rather implement <code>caret/v2</code> from scratch — a different
     language, a backend you fully own? That is the advanced path:
     <a href="/your-agent/">the implementation guide</a>.
   </p>

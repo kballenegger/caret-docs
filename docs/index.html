@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Caret Docs — bring your own backend</title>
-<meta name="description" content="How to run Caret, the agentic iOS keyboard, against a backend you control. The caret/v1 contract, one input model for typed and spoken input, and a reference backend you can download.">
+<meta name="description" content="How to run Caret, the agentic iOS keyboard, against a backend you control. The caret/v2 contract, one input model for typed and spoken input, and a reference backend you can download.">
 <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
 </head>
@@ -55,7 +55,7 @@
   </div>
 
   <div class="card">
-    <h3>Advanced: implement the API yourself<span class="pill">caret/v1</span></h3>
+    <h3>Advanced: implement the API yourself<span class="pill">caret/v2</span></h3>
     <p>
       Want a backend you fully own — a different language, a different
       process model, your own providers? Implement the contract from
@@ -79,35 +79,42 @@
     <p><a href="/imagine-references/"><strong>Repeatable Imagine references →</strong></a></p>
   </div>
 
-  <h2>The three surfaces</h2>
+  <h2>The three operations</h2>
   <table>
-    <tr><th>Surface</th><th>What happens</th><th>Endpoint</th></tr>
+    <tr><th>Operation</th><th>What happens</th><th>Endpoint</th></tr>
+    <tr>
+      <td><strong>Dictate</strong></td>
+      <td>Speech (or raw text) becomes polished, insert-ready text. Audio is
+          uploaded in small chunks as it is spoken, each verified by
+          SHA-256.</td>
+      <td><code>POST /v2/dictate</code></td>
+    </tr>
     <tr>
       <td><strong>Ask</strong></td>
       <td>An instruction — typed or spoken — becomes one insert-ready message.
           Always previewed before it goes into the text field.</td>
-      <td><code>/v1/draft</code></td>
-    </tr>
-    <tr>
-      <td><strong>Dictate</strong></td>
-      <td>Speech becomes polished, insert-ready text. Audio is uploaded in
-          small chunks as it is spoken, each verified by SHA-256.</td>
-      <td><code>/v1/dictation/*</code></td>
+      <td><code>POST /v2/ask</code></td>
     </tr>
     <tr>
       <td><strong>Imagine</strong></td>
       <td>A typed or spoken prompt becomes an image, delivered through the
           pasteboard.</td>
-      <td><code>/v1/imagine</code></td>
+      <td><code>POST /v2/imagine</code></td>
     </tr>
   </table>
   <p>
+    All spoken input travels over one mode-neutral transport:
+    <code>POST /v2/sessions</code> opens a chunked audio session and
+    <code>PUT /v2/sessions/{id}/chunks/{seq}</code> uploads the audio —
+    the session does not know which operation will consume it.
+  </p>
+  <p>
     <strong>Dictate is mandatory; Ask and Imagine are not.</strong> A valid
-    <code>caret/v1</code> backend takes speech and advertises
-    <code>"dictation": true</code>. Anything else it does not provide it
-    says so in <code>capabilities</code>, and Caret hides that surface —
-    a dictation-only backend is a complete backend. In the reference
-    backend every surface is <em>capability-routed</em>: speech is
+    <code>caret/v2</code> backend takes speech and advertises
+    <code>"dictate": true</code>. Anything else it does not provide it
+    says so in <code>capabilities</code>, and Caret hides that operation —
+    a dictate-only backend is a complete backend. In the reference
+    backend every operation is <em>capability-routed</em>: speech is
     transcribed by its own STT lane — local OpenWhisper by default, since
     no agent runtime has a verified transcription interface — and only
     then does text reach the agent, which answers Ask and cleans up
@@ -119,26 +126,29 @@
 
   <h2>One input model</h2>
   <p>
-    Ask and Imagine accept typed text or spoken audio through the same field.
-    Audio is not a second protocol: a spoken Ask opens an ordinary dictation
-    session, uploads ordinary chunks, and then hands the session id to
-    <code>/v1/draft</code> instead of to the transcript endpoint.
+    Every operation accepts the same discriminated <code>input</code>
+    object — typed text, or a spoken audio session. Audio is not a second
+    protocol per operation: a spoken Ask opens an ordinary session, uploads
+    ordinary chunks, and then hands the session id to
+    <code>POST /v2/ask</code>.
   </p>
-  <pre><code>{"input": {"type": "text",  "text": "tell Sam I'm running late"}}
+  <pre><code>{"input": {"type": "text",    "text": "tell Sam I'm running late"}}
 
-{"input": {"type": "audio", "session_id": "sess_9f2c",
+{"input": {"type": "session", "session_id": "sess_9f2c",
            "client_chunk_count": 4, "client_total_duration_ms": 11200}}</code></pre>
   <p>
-    If you have implemented dictation, you have already implemented most of
-    spoken Ask. A session carries exactly one terminal result, so whichever
-    surface consumes it owns it.
+    There is no finalize endpoint: the operation that names a session
+    atomically seals, transcribes, and consumes it. A session carries
+    exactly one terminal result, so whichever operation consumes it owns
+    it — a second operation on the same session is
+    <code>409 session_conflict</code>.
   </p>
 
   <h2>Design principles</h2>
   <ul>
     <li><strong>No privileged server.</strong> The keyboard talks to the base
         URL and API key you enter in the app. Any server that implements
-        <code>caret/v1</code> works.</li>
+        <code>caret/v2</code> works.</li>
     <li><strong>Capabilities are honest.</strong> Health declares what you
         actually support, per surface and per input mode. The keyboard hides
         what you have not enabled rather than failing in the user's hands.</li>
@@ -151,7 +161,8 @@
         original result and never re-run work.</li>
     <li><strong>Additive evolution.</strong> Unknown JSON fields are ignored on
         both sides. Breaking changes require a new path version
-        (<code>/v2</code>).</li>
+        (<code>/v3</code>). <code>caret/v1</code> is deprecated and no longer
+        documented; V2 is the only supported contract.</li>
   </ul>
 
   <h2>Start in two minutes</h2>

@@ -216,6 +216,15 @@ class Store:
             record["error"] = error
             self.write_job(key, record)
 
+    def delete_job(self, key: str) -> None:
+        """Drop a cached job record (session ACK deletes the terminal
+        result along with the audio)."""
+        with _LOCK:
+            try:
+                (self.jobs / f"{_digest(key)}.json").unlink()
+            except FileNotFoundError:
+                pass
+
     # ------------------------------------------------------------ idempotency
 
     def read_idempotent(self, key: str) -> dict | None:

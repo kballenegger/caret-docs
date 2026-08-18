@@ -90,7 +90,7 @@ echo ok | openclaw-draft-wrapper "reply with exactly: ok"
 
 # 2. does the chain draft?
 python3 -m caret_backend --port 8787 &amp;
-curl -s -X POST localhost:8787/v1/draft \
+curl -s -X POST localhost:8787/v2/ask \
   -H "Authorization: Bearer $CARET_API_KEYS" \
   -H 'Content-Type: application/json' \
   -d '{"client_request_id":"smoke-1",

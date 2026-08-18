@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Conformance checker for any `caret/v1` backend.
+"""Conformance checker for any `caret/v2` backend.
 
 Point it at a running backend and it exercises the contract the way a
 client does — including the parts that are easy to get subtly wrong: the
-one input model, chunk idempotency, checksum rejection, the async polling
-convention, and one terminal result per session.
+one input model (and the rejection of the removed V1 aliases), chunk
+idempotency, checksum rejection, the async polling convention, and atomic
+session consumption (one terminal result per session, no finalize
+endpoint).
 
     python3 conformance.py --base-url http://127.0.0.1:8787 --api-key KEY
 
@@ -43,7 +45,7 @@ class Client:
             head.setdefault("Content-Type", "application/octet-stream")
         if auth:
             head["Authorization"] = f"Bearer {self.key}"
-        head.setdefault("X-Caret-Client", "caret-conformance/1.1")
+        head.setdefault("X-Caret-Client", "caret-conformance/2.0")
         req = urllib.request.Request(url, data=data, headers=head, method=method)
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:  # noqa: S310
@@ -55,7 +57,8 @@ class Client:
         """Re-POST the identical body until the result is terminal.
 
         This is the whole async convention: a 202 is not an error and the
-        retry is not a new request — it is the same request again.
+        retry is not a new request — it is the same request again, and
+        `request_id` must not change across polls.
         """
         deadline = time.time() + budget
         first_request_id = None
@@ -121,16 +124,35 @@ def _sha(data: bytes) -> str:
 
 def check_health(client: Client, report: Report) -> dict:
     print("\nhealth")
-    status, body, _ = client.request("GET", "/v1/health", auth=False)
+    status, body, _ = client.request("GET", "/v2/health", auth=False)
     report.check("health is anonymous", status == 200, f"got {status}")
     report.check(
-        "contract is caret/v1", body.get("contract") == "caret/v1", repr(body.get("contract"))
+        "contract is caret/v2", body.get("contract") == "caret/v2", repr(body.get("contract"))
     )
     report.check("time is present", bool(body.get("time")))
     caps = body.get("capabilities") or {}
     report.check("capabilities present", bool(caps), "no capabilities object")
+    modes = caps.get("input_modes") or {}
+    report.check(
+        "input_modes covers every operation",
+        all(isinstance(modes.get(op), list) for op in ("dictate", "ask", "imagine")),
+        json.dumps(modes)[:200],
+    )
+    # Capability honesty: an operation reported off must advertise no
+    # input modes, and one reported on must accept at least text or session.
+    honest = True
+    for op in ("dictate", "ask", "imagine"):
+        declared = bool(caps.get(op))
+        advertised = [m for m in (modes.get(op) or []) if m in ("text", "session")]
+        if declared != bool(advertised):
+            honest = False
+    report.check(
+        "capabilities and input_modes agree",
+        honest,
+        json.dumps(caps)[:300],
+    )
 
-    status, authed, _ = client.request("GET", "/v1/health")
+    status, authed, _ = client.request("GET", "/v2/health")
     report.check(
         "health reflects a valid key",
         (authed.get("auth") or {}).get("valid") is True,
@@ -141,8 +163,8 @@ def check_health(client: Client, report: Report) -> dict:
 
 def check_auth(client: Client, report: Report) -> None:
     print("\nauth")
-    status, body, _ = client.request("POST", "/v1/draft", body={}, auth=False)
-    report.check("unauthenticated draft is 401", status == 401, f"got {status}")
+    status, body, _ = client.request("POST", "/v2/ask", body={}, auth=False)
+    report.check("unauthenticated ask is 401", status == 401, f"got {status}")
     report.check(
         "401 uses the error envelope",
         (body.get("error") or {}).get("code") == "unauthorized",
@@ -151,28 +173,28 @@ def check_auth(client: Client, report: Report) -> None:
     report.check("401 carries a request_id", bool(body.get("request_id")))
 
     bad = Client(client.base, client.key + "-wrong")
-    status, _, _ = bad.request("POST", "/v1/draft", body={})
+    status, _, _ = bad.request("POST", "/v2/ask", body={})
     report.check("a wrong key is 401", status == 401, f"got {status}")
 
 
-def check_text_draft(client: Client, report: Report) -> None:
-    print("\ndraft — typed input")
+def check_text_ask(client: Client, report: Report) -> None:
+    print("\nask — typed input")
     crid = f"conf-text-{int(time.time() * 1000)}"
     body = {
         "client_request_id": crid,
         "input": {"type": "text", "text": "say hello to the team"},
         "app_hint": "com.example.messages",
     }
-    status, payload, _ = client.poll("POST", "/v1/draft", body)
-    if not report.check("typed draft succeeds", status == 200, f"{status} {json.dumps(payload)[:200]}"):
+    status, payload, _ = client.poll("POST", "/v2/ask", body)
+    if not report.check("typed ask succeeds", status == 200, f"{status} {json.dumps(payload)[:200]}"):
         return
-    report.check("draft returns text", isinstance(payload.get("text"), str) and payload["text"])
-    report.check("draft returns a request_id", bool(payload.get("request_id")))
+    report.check("ask returns text", isinstance(payload.get("text"), str) and payload["text"])
+    report.check("ask returns a request_id", bool(payload.get("request_id")))
     report.check(
-        "input_type is text", payload.get("input_type") in (None, "text"), repr(payload.get("input_type"))
+        "input_type is text", payload.get("input_type") == "text", repr(payload.get("input_type"))
     )
 
-    status, replay, _ = client.request("POST", "/v1/draft", body=body)
+    status, replay, _ = client.request("POST", "/v2/ask", body=body)
     report.check(
         "same client_request_id replays the same text",
         status == 200 and replay.get("text") == payload.get("text"),
@@ -181,32 +203,40 @@ def check_text_draft(client: Client, report: Report) -> None:
 
     status, payload, _ = client.request(
         "POST",
-        "/v1/draft",
-        body={"client_request_id": crid + "-both", "input": {"type": "text", "text": "hi"}, "instruction": "hi"},
+        "/v2/ask",
+        body={"client_request_id": crid + "-alias", "instruction": "say hello"},
     )
     report.check(
-        "input plus the legacy alias is rejected",
+        "the removed V1 alias is rejected with input_invalid",
         status == 422 and (payload.get("error") or {}).get("code") == "input_invalid",
         f"{status} {json.dumps(payload)[:200]}",
     )
 
     status, payload, _ = client.request(
-        "POST", "/v1/draft", body={"client_request_id": crid + "-none"}
+        "POST", "/v2/ask", body={"client_request_id": crid + "-none"}
     )
     report.check(
-        "neither input nor alias is rejected",
-        status == 422,
+        "missing input is rejected with input_invalid",
+        status == 422 and (payload.get("error") or {}).get("code") == "input_invalid",
         f"{status} {json.dumps(payload)[:200]}",
     )
 
-    status, payload, _ = client.poll(
+    status, payload, _ = client.request(
         "POST",
-        "/v1/draft",
-        {"client_request_id": crid + "-legacy", "instruction": "say hello"},
+        "/v2/ask",
+        body={
+            "client_request_id": crid + "-audio",
+            "input": {
+                "type": "audio",
+                "session_id": "sess_x",
+                "client_chunk_count": 1,
+                "client_total_duration_ms": 1000,
+            },
+        },
     )
     report.check(
-        "the 1.0 alias still works",
-        status == 200 and isinstance(payload.get("text"), str),
+        'the removed input.type "audio" is rejected with input_invalid',
+        status == 422 and (payload.get("error") or {}).get("code") == "input_invalid",
         f"{status} {json.dumps(payload)[:200]}",
     )
 
@@ -214,7 +244,7 @@ def check_text_draft(client: Client, report: Report) -> None:
 def open_session(client: Client, report: Report, intent: str, tag: str) -> str | None:
     status, payload, _ = client.request(
         "POST",
-        "/v1/dictation/sessions",
+        "/v2/sessions",
         body={
             "client_request_id": f"conf-{tag}-{int(time.time() * 1000)}",
             "codec": "pcm16",
@@ -224,9 +254,9 @@ def open_session(client: Client, report: Report, intent: str, tag: str) -> str |
         },
     )
     if status != 200 or not payload.get("session_id"):
-        report.fail(f"open {intent} session", f"{status} {json.dumps(payload)[:200]}")
+        report.fail(f"open {tag} session", f"{status} {json.dumps(payload)[:200]}")
         return None
-    report.ok(f"open {intent} session")
+    report.ok(f"open {tag} session")
     return payload["session_id"]
 
 
@@ -234,7 +264,7 @@ def upload(client: Client, session_id: str, seq: int, pcm: bytes, *, sha: str | 
     ms = int(len(pcm) / 2 / 16000 * 1000)
     return client.request(
         "PUT",
-        f"/v1/dictation/sessions/{session_id}/chunks/{seq}",
+        f"/v2/sessions/{session_id}/chunks/{seq}",
         body=pcm,
         headers={
             "X-Caret-Chunk-SHA256": sha or _sha(pcm),
@@ -243,8 +273,18 @@ def upload(client: Client, session_id: str, seq: int, pcm: bytes, *, sha: str | 
     )
 
 
-def check_dictation(client: Client, report: Report) -> None:
-    print("\ndictation — chunked audio")
+def session_input(session_id: str, *, count: int, duration_ms: int, polish: bool = False) -> dict:
+    return {
+        "type": "session",
+        "session_id": session_id,
+        "client_chunk_count": count,
+        "client_total_duration_ms": duration_ms,
+        "polish": polish,
+    }
+
+
+def check_dictate(client: Client, report: Report) -> None:
+    print("\ndictate — chunked audio, atomic consumption")
     session_id = open_session(client, report, "dictate", "dict")
     if not session_id:
         return
@@ -269,8 +309,11 @@ def check_dictation(client: Client, report: Report) -> None:
 
     status, payload, _ = client.request(
         "POST",
-        f"/v1/dictation/sessions/{session_id}/transcript",
-        body={"client_chunk_count": 2, "client_total_duration_ms": 6000, "polish": False},
+        "/v2/dictate",
+        body={
+            "client_request_id": "conf-dict-gap",
+            "input": session_input(session_id, count=2, duration_ms=6000),
+        },
     )
     report.check(
         "an incomplete upload reports missing chunks, not an error",
@@ -281,40 +324,50 @@ def check_dictation(client: Client, report: Report) -> None:
     status, _, _ = upload(client, session_id, 1, _pcm(1500))
     report.check("the missing chunk uploads", status == 200)
 
-    status, payload, _ = client.poll(
-        "POST",
-        f"/v1/dictation/sessions/{session_id}/transcript",
-        {"client_chunk_count": 2, "client_total_duration_ms": 4500, "polish": False},
-    )
+    body = {
+        "client_request_id": "conf-dict-final",
+        "input": session_input(session_id, count=2, duration_ms=4500),
+    }
+    status, payload, _ = client.poll("POST", "/v2/dictate", body)
     report.check(
-        "transcript completes",
+        "dictate completes the session",
         status == 200 and payload.get("status") == "complete" and isinstance(payload.get("text"), str),
         f"{status} {json.dumps(payload)[:200]}",
+    )
+    report.check(
+        "dictate echoes the session id",
+        payload.get("session_id") == session_id and payload.get("input_type") == "session",
+        json.dumps(payload)[:200],
     )
 
     status, payload, _ = client.request(
         "POST",
-        "/v1/draft",
+        "/v2/ask",
         body={
             "client_request_id": "conf-conflict",
-            "input": {
-                "type": "audio",
-                "session_id": session_id,
-                "client_chunk_count": 2,
-                "client_total_duration_ms": 4500,
-            },
+            "input": session_input(session_id, count=2, duration_ms=4500),
         },
     )
     report.check(
-        "a consumed session cannot be reused by another surface",
+        "a consumed session cannot be reused by another operation",
+        status == 409 and (payload.get("error") or {}).get("code") == "session_conflict",
+        f"{status} {json.dumps(payload)[:200]}",
+    )
+
+    status, payload, _ = upload(client, session_id, 2, _pcm(500))
+    report.check(
+        "a chunk upload after consumption is a session_conflict",
         status == 409 and (payload.get("error") or {}).get("code") == "session_conflict",
         f"{status} {json.dumps(payload)[:200]}",
     )
 
     status, payload, _ = client.request(
         "POST",
-        "/v1/dictation/sessions/does-not-exist/transcript",
-        body={"client_chunk_count": 1, "client_total_duration_ms": 1000},
+        "/v2/dictate",
+        body={
+            "client_request_id": "conf-unknown",
+            "input": session_input("does-not-exist", count=1, duration_ms=1000),
+        },
     )
     report.check(
         "an unknown session is 404 unknown_session",
@@ -323,12 +376,9 @@ def check_dictation(client: Client, report: Report) -> None:
     )
 
 
-def check_spoken(client: Client, report: Report, surface: str, path: str) -> None:
-    print(f"\n{surface} — spoken input")
-    # `intent` is the client's advisory hint about which surface will consume
-    # the session; the draft surface is Ask.
-    intent = "ask" if surface == "draft" else surface
-    session_id = open_session(client, report, intent, surface)
+def check_spoken(client: Client, report: Report, operation: str) -> None:
+    print(f"\n{operation} — spoken input")
+    session_id = open_session(client, report, operation, operation)
     if not session_id:
         return
     chunk = _pcm(2000)
@@ -337,22 +387,18 @@ def check_spoken(client: Client, report: Report, surface: str, path: str) -> Non
         return
 
     body = {
-        "client_request_id": f"conf-{surface}-{int(time.time() * 1000)}",
-        "input": {
-            "type": "audio",
-            "session_id": session_id,
-            "client_chunk_count": 1,
-            "client_total_duration_ms": 2000,
-            "polish": True,
-        },
+        "client_request_id": f"conf-{operation}-{int(time.time() * 1000)}",
+        "input": session_input(session_id, count=1, duration_ms=2000, polish=True),
     }
-    status, payload, _ = client.poll("POST", path, body)
+    status, payload, _ = client.poll("POST", f"/v2/{operation}", body)
     if not report.check(
-        f"spoken {surface} completes", status == 200, f"{status} {json.dumps(payload)[:200]}"
+        f"spoken {operation} completes", status == 200, f"{status} {json.dumps(payload)[:200]}"
     ):
         return
     report.check(
-        "input_type is audio", payload.get("input_type") == "audio", repr(payload.get("input_type"))
+        "input_type is session",
+        payload.get("input_type") == "session",
+        repr(payload.get("input_type")),
     )
     report.check(
         "the transcript is echoed back",
@@ -362,8 +408,8 @@ def check_spoken(client: Client, report: Report, surface: str, path: str) -> Non
     report.check(
         "the session id is echoed back", payload.get("session_id") == session_id
     )
-    if surface == "draft":
-        report.check("spoken draft returns text", isinstance(payload.get("text"), str))
+    if operation == "ask":
+        report.check("spoken ask returns text", isinstance(payload.get("text"), str))
     else:
         media = payload.get("media") or {}
         report.check(
@@ -378,16 +424,21 @@ def check_imagine_text(client: Client, report: Report) -> None:
     body = {
         "client_request_id": f"conf-img-{int(time.time() * 1000)}",
         "input": {"type": "text", "text": "a lighthouse at dusk"},
-        "aspect_ratio": "square",
-        "quality": "fast",
+        "aspect_ratio": "1:1",
+        "quality": "low",
     }
-    status, payload, _ = client.poll("POST", "/v1/imagine", body)
+    status, payload, _ = client.poll("POST", "/v2/imagine", body)
     if not report.check("typed imagine completes", status == 200, f"{status} {json.dumps(payload)[:200]}"):
         return
     media = payload.get("media") or {}
     report.check("media is a PNG", media.get("mime_type") == "image/png", json.dumps(media)[:200])
     report.check("media declares byte_length", isinstance(media.get("byte_length"), int))
     report.check("media declares sha256", isinstance(media.get("sha256"), str))
+    report.check(
+        "media carries inline_base64 (the only payload transport)",
+        isinstance(media.get("inline_base64"), str) and media["inline_base64"],
+        json.dumps(media)[:200],
+    )
     if isinstance(media.get("inline_base64"), str):
         import base64
 
@@ -397,6 +448,13 @@ def check_imagine_text(client: Client, report: Report) -> None:
             _sha(raw) == media.get("sha256") and len(raw) == media.get("byte_length"),
             "declared digest or length does not match the bytes",
         )
+
+    status, replay, _ = client.poll("POST", "/v2/imagine", body)
+    report.check(
+        "re-posting the identical body replays the cached result",
+        status == 200 and (replay.get("media") or {}).get("sha256") == media.get("sha256"),
+        f"{status} {json.dumps(replay)[:200]}",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -408,26 +466,30 @@ def main(argv: list[str] | None = None) -> int:
     client = Client(args.base_url, args.api_key)
     report = Report()
 
-    print(f"caret/v1 conformance against {client.base}")
+    print(f"caret/v2 conformance against {client.base}")
     caps = check_health(client, report)
     check_auth(client, report)
-    check_text_draft(client, report)
 
     modes = caps.get("input_modes") or {}
-    if caps.get("dictation"):
-        check_dictation(client, report)
-        if "audio" in modes.get("draft", []):
-            check_spoken(client, report, "draft", "/v1/draft")
-        else:
-            report.skip("spoken draft", "capabilities.input_modes.draft has no audio")
+    if caps.get("ask"):
+        check_text_ask(client, report)
     else:
-        report.skip("dictation", "capabilities.dictation is false")
-        report.skip("spoken draft", "capabilities.dictation is false")
+        report.skip("typed ask", "capabilities.ask is false")
+
+    if caps.get("dictate"):
+        check_dictate(client, report)
+        if caps.get("ask") and "session" in (modes.get("ask") or []):
+            check_spoken(client, report, "ask")
+        else:
+            report.skip("spoken ask", "capabilities.input_modes.ask has no session")
+    else:
+        report.skip("dictate", "capabilities.dictate is false (this backend is not ready)")
+        report.skip("spoken ask", "capabilities.dictate is false")
 
     if caps.get("imagine"):
         check_imagine_text(client, report)
-        if caps.get("dictation") and "audio" in modes.get("imagine", []):
-            check_spoken(client, report, "imagine", "/v1/imagine")
+        if caps.get("dictate") and "session" in (modes.get("imagine") or []):
+            check_spoken(client, report, "imagine")
         else:
             report.skip("spoken imagine", "not advertised in capabilities")
     else:

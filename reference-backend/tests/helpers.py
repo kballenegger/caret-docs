@@ -90,7 +90,7 @@ class TestServer:
     def open_session(self, *, intent: str = "dictate", client_request_id: str = "crid-1"):
         status, body, _ = self.request(
             "POST",
-            "/v1/dictation/sessions",
+            "/v2/sessions",
             body={
                 "client_request_id": client_request_id,
                 "codec": "pcm16",
@@ -105,7 +105,7 @@ class TestServer:
     def upload(self, session_id: str, seq: int, pcm: bytes, *, sha: str | None = None):
         return self.request(
             "PUT",
-            f"/v1/dictation/sessions/{session_id}/chunks/{seq}",
+            f"/v2/sessions/{session_id}/chunks/{seq}",
             body=pcm,
             headers={
                 "X-Caret-Chunk-SHA256": sha or sha256_hex(pcm),

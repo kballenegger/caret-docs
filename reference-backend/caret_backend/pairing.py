@@ -1,6 +1,6 @@
 """Pairing tokens: hand over access without handing over the key.
 
-**This is a server-side extension, not part of the caret/v1 client
+**This is a server-side extension, not part of the caret/v2 client
 contract.** The Caret app configures itself by scanning a
 `caret-connect:v1:` code — see `connect.py`, which is what the setup flow
 offers and what the client implements. Nothing in the shipped iOS client
@@ -26,7 +26,7 @@ it stays valid until the key is rotated. This module's alternative is a
     where they would outlive their own expiry.
 
 The client receives the token out of band, POSTs it back over TLS to
-`/v1/pairing/claim`, and gets the durable API key in the response body —
+`/v2/pairing/claim`, and gets the durable API key in the response body —
 one TLS-protected exchange, with the credential never rendered as pixels.
 
 Every failure is a distinct, machine-readable code so a client can say

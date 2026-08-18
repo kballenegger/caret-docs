@@ -41,31 +41,41 @@ class ServerCase(unittest.TestCase):
         self.assertTrue(payload.get("request_id"), "every error carries a request_id")
 
 
+def session_input(session_id: str, *, count: int = 2, ms: int = 3000, polish: bool = True) -> dict:
+    return {
+        "type": "session",
+        "session_id": session_id,
+        "client_chunk_count": count,
+        "client_total_duration_ms": ms,
+        "polish": polish,
+    }
+
+
 class HealthTests(ServerCase):
     def test_health_is_anonymous_and_declares_the_contract(self):
-        status, body, _ = self.server.request("GET", "/v1/health", key=None)
+        status, body, _ = self.server.request("GET", "/v2/health", key=None)
         self.assertEqual(status, 200)
-        self.assertEqual(body["contract"], "caret/v1")
+        self.assertEqual(body["contract"], "caret/v2")
         self.assertEqual(body["status"], "ok")
         self.assertTrue(body["time"].endswith("Z"))
         self.assertEqual(body["auth"], {"presented": False, "valid": None})
 
-    def test_health_reports_input_modes_per_surface(self):
-        _, body, _ = self.server.request("GET", "/v1/health", key=None)
+    def test_health_reports_input_modes_per_operation(self):
+        _, body, _ = self.server.request("GET", "/v2/health", key=None)
         caps = body["capabilities"]
-        self.assertTrue(caps["draft"] and caps["dictation"] and caps["imagine"])
-        self.assertEqual(caps["input_modes"]["draft"], ["text", "audio"])
-        self.assertEqual(caps["input_modes"]["imagine"], ["text", "audio"])
-        self.assertEqual(caps["input_modes"]["dictation"], ["audio"])
+        self.assertTrue(caps["dictate"] and caps["ask"] and caps["imagine"])
+        self.assertEqual(caps["input_modes"]["dictate"], ["text", "session"])
+        self.assertEqual(caps["input_modes"]["ask"], ["text", "session"])
+        self.assertEqual(caps["input_modes"]["imagine"], ["text", "session"])
 
     def test_health_validates_a_presented_key_without_requiring_one(self):
-        _, ok, _ = self.server.request("GET", "/v1/health")
+        _, ok, _ = self.server.request("GET", "/v2/health")
         self.assertEqual(ok["auth"], {"presented": True, "valid": True})
-        _, bad, _ = self.server.request("GET", "/v1/health", key="nope")
+        _, bad, _ = self.server.request("GET", "/v2/health", key="nope")
         self.assertEqual(bad["auth"], {"presented": True, "valid": False})
 
 
-class DictationIsMandatoryTests(unittest.TestCase):
+class DictateIsMandatoryTests(unittest.TestCase):
     """Dictate is not one capability among three.
 
     A valid Caret backend takes speech. Ask and Imagine are optional
@@ -76,21 +86,21 @@ class DictationIsMandatoryTests(unittest.TestCase):
     def test_a_backend_with_stt_and_keys_is_ready(self):
         server = TestServer()
         self.addCleanup(server.close)
-        _, health, _ = server.request("GET", "/v1/health", key=None)
+        _, health, _ = server.request("GET", "/v2/health", key=None)
         self.assertEqual(health["status"], "ok")
         self.assertEqual(health["readiness"], {"ready": True, "blockers": []})
-        self.assertTrue(health["capabilities"]["dictation"])
+        self.assertTrue(health["capabilities"]["dictate"])
 
     def test_no_stt_is_not_ready_and_never_reports_ok(self):
         server = TestServer(transcriber=adapters.NullTranscriber())
         self.addCleanup(server.close)
-        _, health, _ = server.request("GET", "/v1/health", key=None)
+        _, health, _ = server.request("GET", "/v2/health", key=None)
         self.assertEqual(health["status"], "not_ready")
         self.assertFalse(health["readiness"]["ready"])
         self.assertIn(
             "no_stt_adapter", [b["code"] for b in health["readiness"]["blockers"]]
         )
-        self.assertEqual(health["routes"]["dictation"], {"route": "off"})
+        self.assertEqual(health["routes"]["dictate"], {"route": "off"})
 
     def test_ask_on_with_dictate_off_is_still_not_ready(self):
         # The exact shape the public docs must never present as valid.
@@ -100,25 +110,36 @@ class DictationIsMandatoryTests(unittest.TestCase):
             image_generator=None,
         )
         self.addCleanup(server.close)
-        _, health, _ = server.request("GET", "/v1/health", key=None)
-        self.assertTrue(health["capabilities"]["draft"])
-        self.assertFalse(health["capabilities"]["dictation"])
+        _, health, _ = server.request("GET", "/v2/health", key=None)
+        self.assertTrue(health["capabilities"]["ask"])
+        self.assertFalse(health["capabilities"]["dictate"])
         self.assertEqual(health["status"], "not_ready")
 
     def test_missing_keys_is_degraded_and_missing_stt_outranks_it(self):
         server = TestServer(api_keys=(), transcriber=adapters.NullTranscriber())
         self.addCleanup(server.close)
-        _, health, _ = server.request("GET", "/v1/health", key=None)
+        _, health, _ = server.request("GET", "/v2/health", key=None)
         self.assertEqual(health["status"], "not_ready")
         self.assertEqual(
             sorted(b["code"] for b in health["readiness"]["blockers"]),
             ["no_api_keys", "no_stt_adapter"],
         )
 
+    def test_dictate_is_404_without_a_transcriber(self):
+        server = TestServer(transcriber=adapters.NullTranscriber())
+        self.addCleanup(server.close)
+        status, body, _ = server.request(
+            "POST",
+            "/v2/dictate",
+            body={"client_request_id": "d1", "input": {"type": "text", "text": "hi"}},
+        )
+        self.assertEqual(status, 404, body)
+        self.assertEqual(body["error"]["code"], "not_found")
+
 
 class AskIsOptionalTests(unittest.TestCase):
-    """No agent configured is a valid dictation-only backend — provided it
-    reports that, and does not answer drafts with a stand-in."""
+    """No agent configured is a valid dictate-only backend — provided it
+    reports that, and does not answer asks with a stand-in."""
 
     def server(self, **overrides):
         server = TestServer(agent=adapters.NullAgent(), **overrides)
@@ -126,35 +147,34 @@ class AskIsOptionalTests(unittest.TestCase):
         return server
 
     def test_health_reports_ask_off_but_stays_ready(self):
-        _, health, _ = self.server().request("GET", "/v1/health", key=None)
+        _, health, _ = self.server().request("GET", "/v2/health", key=None)
         self.assertEqual(health["status"], "ok")
         self.assertTrue(health["readiness"]["ready"])
-        self.assertFalse(health["capabilities"]["draft"])
-        self.assertNotIn("draft", health["capabilities"]["input_modes"])
+        self.assertFalse(health["capabilities"]["ask"])
+        self.assertEqual(health["capabilities"]["input_modes"]["ask"], [])
         self.assertEqual(health["routes"]["ask"], {"route": "off"})
-        self.assertEqual(health["routes"]["cleanup"], {"route": "off"})
+        self.assertEqual(health["routes"]["dictate"]["cleanup"], {"route": "off"})
         self.assertEqual(health["adapters"]["agent"], "none")
 
-    def test_draft_is_404_not_an_echo(self):
+    def test_ask_is_404_not_an_echo(self):
         status, body, _ = self.server().request(
             "POST",
-            "/v1/draft",
+            "/v2/ask",
             body={"client_request_id": "c1", "input": {"type": "text", "text": "hi"}},
         )
         self.assertEqual(status, 404, body)
         self.assertEqual(body["error"]["code"], "not_found")
 
-    def test_dictation_still_works_and_returns_the_raw_transcript(self):
+    def test_dictate_still_works_and_returns_the_raw_transcript(self):
         server = self.server()
         session_id = server.open_session()
         server.upload(session_id, 0, pcm(1500))
         status, body, _ = server.request(
             "POST",
-            f"/v1/dictation/sessions/{session_id}/transcript",
+            "/v2/dictate",
             body={
-                "client_chunk_count": 1,
-                "client_total_duration_ms": 1500,
-                "polish": True,
+                "client_request_id": "d1",
+                "input": session_input(session_id, count=1, ms=1500, polish=True),
             },
         )
         self.assertEqual(status, 200, body)
@@ -163,29 +183,35 @@ class AskIsOptionalTests(unittest.TestCase):
         # the transcript comes back raw rather than the request failing.
         self.assertIn("transcribed", body["text"])
 
+    def test_text_dictate_returns_the_text_unchanged_without_an_agent(self):
+        status, body, _ = self.server().request(
+            "POST",
+            "/v2/dictate",
+            body={"client_request_id": "d2", "input": {"type": "text", "text": "um hi"}},
+        )
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["text"], "um hi")
+        self.assertEqual(body["input_type"], "text")
+
 
 class CapabilityHonestyTests(unittest.TestCase):
-    def test_a_backend_without_a_transcriber_says_so_and_refuses_audio(self):
+    def test_a_backend_without_a_transcriber_says_so_and_refuses_sessions(self):
         server = TestServer(transcriber=adapters.NullTranscriber(), image_generator=None)
         self.addCleanup(server.close)
-        _, health, _ = server.request("GET", "/v1/health", key=None)
+        _, health, _ = server.request("GET", "/v2/health", key=None)
         caps = health["capabilities"]
-        self.assertFalse(caps["dictation"])
+        self.assertFalse(caps["dictate"])
         self.assertFalse(caps["imagine"])
-        self.assertEqual(caps["input_modes"]["draft"], ["text"])
-        self.assertNotIn("imagine", caps["input_modes"])
+        self.assertEqual(caps["input_modes"]["dictate"], [])
+        self.assertEqual(caps["input_modes"]["ask"], ["text"])
+        self.assertEqual(caps["input_modes"]["imagine"], [])
 
         status, body, _ = server.request(
             "POST",
-            "/v1/draft",
+            "/v2/ask",
             body={
                 "client_request_id": "c1",
-                "input": {
-                    "type": "audio",
-                    "session_id": "sess_x",
-                    "client_chunk_count": 1,
-                    "client_total_duration_ms": 1000,
-                },
+                "input": session_input("sess_x", count=1, ms=1000),
             },
         )
         self.assertEqual(status, 422, body)
@@ -196,7 +222,7 @@ class CapabilityHonestyTests(unittest.TestCase):
         self.addCleanup(server.close)
         status, body, _ = server.request(
             "POST",
-            "/v1/imagine",
+            "/v2/imagine",
             body={"client_request_id": "c1", "input": {"type": "text", "text": "a cat"}},
         )
         self.assertEqual(status, 404, body)
@@ -204,41 +230,42 @@ class CapabilityHonestyTests(unittest.TestCase):
 
 
 class AuthTests(ServerCase):
-    def test_every_surface_but_health_requires_a_bearer_key(self):
+    def test_every_operation_but_health_requires_a_bearer_key(self):
         for method, path in (
-            ("POST", "/v1/draft"),
-            ("POST", "/v1/imagine"),
-            ("POST", "/v1/dictation/sessions"),
+            ("POST", "/v2/dictate"),
+            ("POST", "/v2/ask"),
+            ("POST", "/v2/imagine"),
+            ("POST", "/v2/sessions"),
         ):
             status, body, _ = self.server.request(method, path, body={}, key=None)
             self.assertEqual(status, 401, path)
             self.assertError(body, "unauthorized")
 
     def test_a_wrong_key_is_rejected(self):
-        status, body, _ = self.server.request("POST", "/v1/draft", body={}, key="wrong")
+        status, body, _ = self.server.request("POST", "/v2/ask", body={}, key="wrong")
         self.assertEqual(status, 401)
         self.assertError(body, "unauthorized")
 
     def test_a_backend_with_no_keys_configured_fails_closed(self):
         server = TestServer(api_keys=())
         self.addCleanup(server.close)
-        status, _, _ = server.request("POST", "/v1/draft", body={}, key="anything")
+        status, _, _ = server.request("POST", "/v2/ask", body={}, key="anything")
         self.assertEqual(status, 401)
-        _, health, _ = server.request("GET", "/v1/health", key=None)
+        _, health, _ = server.request("GET", "/v2/health", key=None)
         self.assertEqual(health["status"], "degraded")
 
     def test_an_unknown_route_is_a_contract_shaped_404(self):
-        status, body, _ = self.server.request("GET", "/v1/nope")
+        status, body, _ = self.server.request("GET", "/v2/nope")
         self.assertEqual(status, 404)
         self.assertError(body, "not_found")
 
 
 class InputModelTests(ServerCase):
-    def draft(self, **payload):
-        return self.server.request("POST", "/v1/draft", body=payload)
+    def ask(self, **payload):
+        return self.server.request("POST", "/v2/ask", body=payload)
 
     def test_typed_input_object_is_accepted(self):
-        status, body, _ = self.draft(
+        status, body, _ = self.ask(
             client_request_id="c1", input={"type": "text", "text": "say hi"}
         )
         self.assertEqual(status, 200, body)
@@ -247,50 +274,69 @@ class InputModelTests(ServerCase):
         self.assertEqual(body["input_type"], "text")
         self.assertTrue(body["request_id"])
 
-    def test_the_1_0_instruction_alias_still_works(self):
-        status, body, _ = self.draft(client_request_id="c1", instruction="say hi")
-        self.assertEqual(status, 200, body)
-        self.assertEqual(body["text"], "[draft] say hi")
+    def test_the_v1_instruction_alias_is_gone(self):
+        # `instruction` is not part of caret/v2. It is an unknown field, so
+        # the request simply has no input — and says so.
+        status, body, _ = self.ask(client_request_id="c1", instruction="say hi")
+        self.assertEqual(status, 422)
+        self.assertError(body, "input_invalid")
 
-    def test_supplying_both_input_and_the_alias_is_rejected(self):
-        status, body, _ = self.draft(
-            client_request_id="c1", input={"type": "text", "text": "a"}, instruction="a"
+    def test_the_v1_audio_discriminator_is_gone(self):
+        status, body, _ = self.ask(
+            client_request_id="c1",
+            input={
+                "type": "audio",
+                "session_id": "sess_x",
+                "client_chunk_count": 1,
+                "client_total_duration_ms": 1000,
+            },
         )
         self.assertEqual(status, 422)
         self.assertError(body, "input_invalid")
 
-    def test_supplying_neither_is_rejected(self):
-        status, body, _ = self.draft(client_request_id="c1")
+    def test_supplying_no_input_is_rejected(self):
+        status, body, _ = self.ask(client_request_id="c1")
         self.assertEqual(status, 422)
         self.assertError(body, "input_invalid")
 
     def test_an_unknown_input_type_is_rejected(self):
-        status, body, _ = self.draft(client_request_id="c1", input={"type": "video"})
+        status, body, _ = self.ask(client_request_id="c1", input={"type": "video"})
         self.assertEqual(status, 422)
         self.assertError(body, "input_invalid")
 
-    def test_empty_and_oversized_text_are_rejected_with_their_own_codes(self):
-        status, body, _ = self.draft(client_request_id="c1", input={"type": "text", "text": ""})
-        self.assertEqual(status, 422)
-        self.assertError(body, "input_invalid")
+    def test_empty_and_oversized_text_are_rejected(self):
+        for text in ("", "x" * 4001):
+            status, body, _ = self.ask(
+                client_request_id="c1", input={"type": "text", "text": text}
+            )
+            self.assertEqual(status, 422)
+            self.assertError(body, "input_invalid")
 
-        status, body, _ = self.draft(client_request_id="c2", instruction="x" * 4001)
-        self.assertEqual(status, 422)
-        self.assertError(body, "instruction_invalid")
+    def test_session_input_requires_the_completeness_fields(self):
+        for missing in ("client_chunk_count", "client_total_duration_ms"):
+            value = session_input("sess_x")
+            del value[missing]
+            status, body, _ = self.ask(client_request_id="c1", input=value)
+            self.assertEqual(status, 422, missing)
+            self.assertError(body, "input_invalid")
 
     def test_client_request_id_is_required(self):
-        status, body, _ = self.draft(input={"type": "text", "text": "hi"})
+        status, body, _ = self.ask(input={"type": "text", "text": "hi"})
         self.assertEqual(status, 400)
         self.assertError(body, "bad_request")
 
     def test_a_repeated_client_request_id_replays_the_first_answer(self):
-        _, first, _ = self.draft(client_request_id="same", instruction="one")
-        _, second, _ = self.draft(client_request_id="same", instruction="two")
+        _, first, _ = self.ask(
+            client_request_id="same", input={"type": "text", "text": "one"}
+        )
+        _, second, _ = self.ask(
+            client_request_id="same", input={"type": "text", "text": "two"}
+        )
         self.assertEqual(second["text"], first["text"])
 
     def test_a_malformed_body_is_a_400_not_a_traceback(self):
         status, body, _ = self.server.request(
-            "POST", "/v1/draft", body=b"{not json", headers={"Content-Type": "application/json"}
+            "POST", "/v2/ask", body=b"{not json", headers={"Content-Type": "application/json"}
         )
         self.assertEqual(status, 400)
         self.assertError(body, "bad_request")
@@ -300,7 +346,7 @@ class SessionTests(ServerCase):
     def test_a_session_declares_the_chunk_limits_the_client_must_honour(self):
         status, body, _ = self.server.request(
             "POST",
-            "/v1/dictation/sessions",
+            "/v2/sessions",
             body={
                 "client_request_id": "c1",
                 "codec": "pcm16",
@@ -314,20 +360,30 @@ class SessionTests(ServerCase):
         self.assertEqual(body["chunk_target_duration_ms"], 3000)
         self.assertTrue(body["expires_at"].endswith("Z"))
 
-    def test_only_the_v1_audio_format_is_accepted(self):
+    def test_only_the_contract_audio_format_is_accepted(self):
         base = {"client_request_id": "c1", "codec": "pcm16", "sample_rate_hz": 16000, "channels": 1}
         status, body, _ = self.server.request(
-            "POST", "/v1/dictation/sessions", body={**base, "codec": "opus"}
+            "POST", "/v2/sessions", body={**base, "codec": "opus"}
         )
         self.assertEqual(status, 415)
         self.assertError(body, "unsupported_audio_codec")
 
         for field, value in (("sample_rate_hz", 44100), ("channels", 2)):
             status, body, _ = self.server.request(
-                "POST", "/v1/dictation/sessions", body={**base, field: value}
+                "POST", "/v2/sessions", body={**base, field: value}
             )
             self.assertEqual(status, 400, field)
             self.assertError(body, "bad_request")
+
+    def test_intent_is_advisory_and_optional(self):
+        base = {"client_request_id": "c-intent", "codec": "pcm16", "sample_rate_hz": 16000, "channels": 1}
+        status, body, _ = self.server.request("POST", "/v2/sessions", body=base)
+        self.assertEqual(status, 200, body)
+        status, body, _ = self.server.request(
+            "POST", "/v2/sessions", body={**base, "client_request_id": "c-intent2", "intent": "nope"}
+        )
+        self.assertEqual(status, 400)
+        self.assertError(body, "bad_request")
 
     def test_reopening_with_the_same_client_request_id_replays_the_session(self):
         first = self.server.open_session(client_request_id="dup")
@@ -337,8 +393,11 @@ class SessionTests(ServerCase):
     def test_an_unknown_session_is_404(self):
         status, body, _ = self.server.request(
             "POST",
-            "/v1/dictation/sessions/sess_missing/transcript",
-            body={"client_chunk_count": 1, "client_total_duration_ms": 1000},
+            "/v2/dictate",
+            body={
+                "client_request_id": "c1",
+                "input": session_input("sess_missing", count=1, ms=1000),
+            },
         )
         self.assertEqual(status, 404)
         self.assertError(body, "unknown_session")
@@ -388,7 +447,7 @@ class ChunkTests(ServerCase):
     def test_a_missing_digest_header_is_rejected(self):
         status, body, _ = self.server.request(
             "PUT",
-            f"/v1/dictation/sessions/{self.session_id}/chunks/0",
+            f"/v2/sessions/{self.session_id}/chunks/0",
             body=pcm(500),
         )
         self.assertEqual(status, 400)
@@ -409,94 +468,105 @@ class SpokenFlowTests(ServerCase):
             self.assertEqual(status, 200, body)
         return session_id
 
-    def audio(self, session_id: str, *, count: int = 2, polish: bool = True) -> dict:
-        return {
-            "type": "audio",
-            "session_id": session_id,
-            "client_chunk_count": count,
-            "client_total_duration_ms": count * 1500,
-            "polish": polish,
-        }
-
-    def test_dictation_returns_the_transcript(self):
-        session_id = self.prepare()
-        status, body, _ = self.server.request(
+    def dictate(self, session_id: str, *, count: int = 2, ms: int = 3000, polish: bool = True, crid: str = "d1"):
+        return self.server.request(
             "POST",
-            f"/v1/dictation/sessions/{session_id}/transcript",
-            body={"client_chunk_count": 2, "client_total_duration_ms": 3000, "polish": False},
+            "/v2/dictate",
+            body={
+                "client_request_id": crid,
+                "input": session_input(session_id, count=count, ms=ms, polish=polish),
+            },
         )
+
+    def test_dictate_returns_the_transcript(self):
+        session_id = self.prepare()
+        status, body, _ = self.dictate(session_id, polish=False)
         self.assertEqual(status, 200, body)
         self.assertEqual(body["status"], "complete")
+        self.assertEqual(body["input_type"], "session")
         self.assertIn("transcribed", body["text"])
+        self.assertEqual(body["session_id"], session_id)
         self.assertEqual(body["missing_chunks"], [])
         self.assertEqual(body["duration_ms"], 3000)
 
     def test_a_gap_in_the_upload_is_a_200_not_an_error(self):
         session_id = self.server.open_session()
         self.server.upload(session_id, 0, pcm(1500))
-        status, body, _ = self.server.request(
-            "POST",
-            f"/v1/dictation/sessions/{session_id}/transcript",
-            body={"client_chunk_count": 3, "client_total_duration_ms": 4500},
-        )
+        status, body, _ = self.dictate(session_id, count=3, ms=4500)
         self.assertEqual(status, 200, body)
         self.assertEqual(body["status"], "missing_chunks")
         self.assertEqual(body["missing_chunks"], [1, 2])
         self.assertIsNone(body["text"])
 
-    def test_ask_accepts_a_dictate_session_instead_of_typed_text(self):
+    def test_ask_accepts_a_session_instead_of_typed_text(self):
         session_id = self.prepare(intent="ask")
         status, body, _ = self.server.request(
             "POST",
-            "/v1/draft",
-            body={"client_request_id": "ask-1", "input": self.audio(session_id)},
+            "/v2/ask",
+            body={"client_request_id": "ask-1", "input": session_input(session_id)},
         )
         self.assertEqual(status, 200, body)
-        self.assertEqual(body["input_type"], "audio")
+        self.assertEqual(body["input_type"], "session")
         self.assertEqual(body["session_id"], session_id)
         self.assertTrue(body["transcript"])
         self.assertTrue(body["text"].startswith("[draft] "))
         self.assertEqual(body["duration_ms"], 3000)
 
-    def test_polish_runs_on_the_transcript_before_the_agent_sees_it(self):
-        unpolished = self.server.request(
-            "POST",
-            f"/v1/dictation/sessions/{self.prepare()}/transcript",
-            body={"client_chunk_count": 2, "client_total_duration_ms": 3000, "polish": False},
-        )[1]["text"]
-        polished = self.server.request(
-            "POST",
-            f"/v1/dictation/sessions/{self.prepare(intent='ask')}/transcript",
-            body={"client_chunk_count": 2, "client_total_duration_ms": 3000, "polish": True},
-        )[1]["text"]
+    def test_polish_runs_on_the_transcript_before_it_is_returned(self):
+        unpolished = self.dictate(self.prepare(), polish=False)[1]["text"]
+        polished = self.dictate(self.prepare(intent="ask"), polish=True, crid="d2")[1]["text"]
         # EchoAgent.polish capitalises; the point is that the flag is honoured.
         self.assertNotEqual(polished, unpolished)
         self.assertEqual(polished, unpolished.capitalize())
 
-    def test_imagine_accepts_the_same_audio_input(self):
+    def test_text_dictate_runs_the_cleanup_pass(self):
+        status, body, _ = self.server.request(
+            "POST",
+            "/v2/dictate",
+            body={"client_request_id": "t1", "input": {"type": "text", "text": "um hi there"}},
+        )
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["input_type"], "text")
+        # EchoAgent.polish capitalises the raw text.
+        self.assertEqual(body["text"], "Um hi there")
+
+    def test_text_dictate_is_idempotent_by_client_request_id(self):
+        body = {"client_request_id": "t-same", "input": {"type": "text", "text": "um one"}}
+        first = self.server.request("POST", "/v2/dictate", body=body)[1]
+        second = self.server.request(
+            "POST",
+            "/v2/dictate",
+            body={"client_request_id": "t-same", "input": {"type": "text", "text": "um two"}},
+        )[1]
+        self.assertEqual(first["text"], second["text"])
+
+    def test_imagine_accepts_the_same_session_input(self):
         session_id = self.prepare(intent="imagine")
         status, body, _ = self.server.request(
             "POST",
-            "/v1/imagine",
-            body={"client_request_id": "img-1", "input": self.audio(session_id)},
+            "/v2/imagine",
+            body={"client_request_id": "img-1", "input": session_input(session_id)},
         )
         self.assertEqual(status, 200, body)
-        self.assertEqual(body["input_type"], "audio")
+        self.assertEqual(body["input_type"], "session")
         self.assertEqual(body["media"]["mime_type"], "image/png")
         self.assertTrue(body["transcript"])
 
     def test_a_session_carries_exactly_one_terminal_result(self):
         session_id = self.prepare()
-        self.server.request(
-            "POST",
-            f"/v1/dictation/sessions/{session_id}/transcript",
-            body={"client_chunk_count": 2, "client_total_duration_ms": 3000},
-        )
+        self.dictate(session_id)
         status, body, _ = self.server.request(
             "POST",
-            "/v1/draft",
-            body={"client_request_id": "steal", "input": self.audio(session_id)},
+            "/v2/ask",
+            body={"client_request_id": "steal", "input": session_input(session_id)},
         )
+        self.assertEqual(status, 409, body)
+        self.assertError(body, "session_conflict")
+
+    def test_a_chunk_upload_after_consumption_is_a_conflict(self):
+        session_id = self.prepare()
+        self.dictate(session_id)
+        status, body, _ = self.server.upload(session_id, 2, pcm(500))
         self.assertEqual(status, 409, body)
         self.assertError(body, "session_conflict")
 
@@ -504,23 +574,50 @@ class SpokenFlowTests(ServerCase):
         session_id = self.prepare()
         chunks = self.server.backend.store.sessions / session_id / "chunks"
         self.assertTrue(chunks.exists())
-        self.server.request(
-            "POST",
-            f"/v1/dictation/sessions/{session_id}/transcript",
-            body={"client_chunk_count": 2, "client_total_duration_ms": 3000},
-        )
+        self.dictate(session_id)
         self.assertFalse(chunks.exists(), "raw audio must not outlive its result")
 
     def test_re_posting_a_finished_request_replays_the_cached_result(self):
         session_id = self.prepare()
-        body = {"client_chunk_count": 2, "client_total_duration_ms": 3000}
-        first = self.server.request(
-            "POST", f"/v1/dictation/sessions/{session_id}/transcript", body=body
-        )[1]
-        second = self.server.request(
-            "POST", f"/v1/dictation/sessions/{session_id}/transcript", body=body
-        )[1]
+        first = self.dictate(session_id)[1]
+        second = self.dictate(session_id)[1]
         self.assertEqual(first, second)
+
+
+class AckTests(ServerCase):
+    def test_ack_deletes_the_cached_result_and_is_idempotent(self):
+        session_id = self.server.open_session()
+        self.server.upload(session_id, 0, pcm(1500))
+        self.server.request(
+            "POST",
+            "/v2/dictate",
+            body={"client_request_id": "a1", "input": session_input(session_id, count=1, ms=1500)},
+        )
+        status, body, _ = self.server.request("POST", f"/v2/sessions/{session_id}/ack")
+        self.assertEqual(status, 200, body)
+        self.assertTrue(body["acknowledged"])
+        self.assertFalse(body["already_acknowledged"])
+        status, replay, _ = self.server.request("POST", f"/v2/sessions/{session_id}/ack")
+        self.assertEqual(status, 200, replay)
+        self.assertTrue(replay["already_acknowledged"])
+
+    def test_acking_an_unconsumed_session_abandons_it(self):
+        session_id = self.server.open_session()
+        self.server.upload(session_id, 0, pcm(1500))
+        status, body, _ = self.server.request("POST", f"/v2/sessions/{session_id}/ack")
+        self.assertEqual(status, 200, body)
+        status, body, _ = self.server.request(
+            "POST",
+            "/v2/dictate",
+            body={"client_request_id": "a2", "input": session_input(session_id, count=1, ms=1500)},
+        )
+        self.assertEqual(status, 409, body)
+        self.assertError(body, "session_conflict")
+
+    def test_acking_an_unknown_session_is_404(self):
+        status, body, _ = self.server.request("POST", "/v2/sessions/sess_missing/ack")
+        self.assertEqual(status, 404)
+        self.assertError(body, "unknown_session")
 
 
 class AsyncTests(unittest.TestCase):
@@ -532,40 +629,28 @@ class AsyncTests(unittest.TestCase):
         self.addCleanup(self.server.close)
         self.addCleanup(self.agent.released.set)
 
-    def post(self):
-        return self.server.request(
-            "POST",
-            "/v1/draft",
-            body={"client_request_id": "slow-1", "input": {"type": "text", "text": "wait"}},
-        )
-
     def test_in_progress_is_202_with_retry_after_and_a_stable_request_id(self):
         session_id = self.server.open_session(intent="ask")
         self.server.upload(session_id, 0, pcm(1000))
         body = {
             "client_request_id": "slow-audio",
-            "input": {
-                "type": "audio",
-                "session_id": session_id,
-                "client_chunk_count": 1,
-                "client_total_duration_ms": 1000,
-            },
+            "input": session_input(session_id, count=1, ms=1000),
         }
-        status, first, headers = self.server.request("POST", "/v1/draft", body=body)
+        status, first, headers = self.server.request("POST", "/v2/ask", body=body)
         self.assertEqual(status, 202, first)
         self.assertEqual(first["status"], "in_progress")
         self.assertTrue(int(headers["Retry-After"]) >= 1)
         self.assertEqual(headers["Retry-After"], str(first["retry_after_seconds"]))
 
         # Polling is re-POSTing the identical body — not a new request.
-        status, again, _ = self.server.request("POST", "/v1/draft", body=body)
+        status, again, _ = self.server.request("POST", "/v2/ask", body=body)
         self.assertEqual(status, 202)
         self.assertEqual(again["request_id"], first["request_id"])
 
         self.agent.released.set()
         deadline = time.time() + 10
         while time.time() < deadline:
-            status, final, _ = self.server.request("POST", "/v1/draft", body=body)
+            status, final, _ = self.server.request("POST", "/v2/ask", body=body)
             if status == 200:
                 break
             time.sleep(0.05)
@@ -578,18 +663,13 @@ class AsyncTests(unittest.TestCase):
         self.server.upload(session_id, 0, pcm(1000))
         body = {
             "client_request_id": "race",
-            "input": {
-                "type": "audio",
-                "session_id": session_id,
-                "client_chunk_count": 1,
-                "client_total_duration_ms": 1000,
-            },
+            "input": session_input(session_id, count=1, ms=1000),
         }
         seen: list[str] = []
         lock = threading.Lock()
 
         def poll():
-            _, payload, _ = self.server.request("POST", "/v1/draft", body=body)
+            _, payload, _ = self.server.request("POST", "/v2/ask", body=body)
             with lock:
                 seen.append(payload["request_id"])
 
@@ -606,7 +686,7 @@ class MediaTests(ServerCase):
     def test_imagine_media_declares_a_digest_that_matches_the_bytes(self):
         status, body, _ = self.server.request(
             "POST",
-            "/v1/imagine",
+            "/v2/imagine",
             body={"client_request_id": "i1", "input": {"type": "text", "text": "a lighthouse"}},
         )
         self.assertEqual(status, 200, body)
@@ -620,7 +700,7 @@ class MediaTests(ServerCase):
         for field, code in (("aspect_ratio", "unsupported_aspect_ratio"), ("quality", "unsupported_quality")):
             status, body, _ = self.server.request(
                 "POST",
-                "/v1/imagine",
+                "/v2/imagine",
                 body={
                     "client_request_id": f"i-{field}",
                     "input": {"type": "text", "text": "x"},
@@ -630,6 +710,21 @@ class MediaTests(ServerCase):
             self.assertEqual(status, 422, field)
             self.assertError(body, code)
 
+    def test_the_advertised_ratios_and_qualities_are_accepted(self):
+        status, body, _ = self.server.request(
+            "POST",
+            "/v2/imagine",
+            body={
+                "client_request_id": "i-ok",
+                "input": {"type": "text", "text": "x"},
+                "aspect_ratio": "3:2",
+                "quality": "low",
+            },
+        )
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["aspect_ratio"], "3:2")
+        self.assertEqual(body["quality"], "low")
+
 
 class RateLimitTests(unittest.TestCase):
     def test_a_flood_from_one_key_is_throttled_not_served(self):
@@ -638,7 +733,7 @@ class RateLimitTests(unittest.TestCase):
         codes = [
             server.request(
                 "POST",
-                "/v1/draft",
+                "/v2/ask",
                 body={"client_request_id": f"r{i}", "input": {"type": "text", "text": "hi"}},
             )[0]
             for i in range(5)
@@ -646,7 +741,7 @@ class RateLimitTests(unittest.TestCase):
         self.assertEqual(codes[:3], [200, 200, 200], codes)
         self.assertEqual(codes[3:], [429, 429], codes)
         _, body, _ = server.request(
-            "POST", "/v1/draft", body={"client_request_id": "r9", "input": {"type": "text", "text": "hi"}}
+            "POST", "/v2/ask", body={"client_request_id": "r9", "input": {"type": "text", "text": "hi"}}
         )
         self.assertEqual(body["error"]["code"], "rate_limited")
         self.assertTrue(body["error"]["retryable"])
@@ -730,6 +825,19 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(len(argv), 5)
         self.assertIsNone(stdin_text)
 
+    def test_agent_timeouts_map_to_ask_timeout(self):
+        agent = adapters.CommandAgent(
+            name="sleepy",
+            template=f'{sys.executable} -c "import time;time.sleep(5)" {{prompt}}',
+            timeout=1,
+        )
+        from caret_backend.errors import CaretError
+
+        with self.assertRaises(CaretError) as ctx:
+            agent.complete("hi")
+        self.assertEqual(ctx.exception.code, "ask_timeout")
+        self.assertEqual(ctx.exception.status, 504)
+
     def test_env_wiring_prefers_an_explicit_command_over_a_preset(self):
         self.assertIsInstance(adapters.agent_from_env({"CARET_AGENT": "echo"}), adapters.EchoAgent)
         custom = adapters.agent_from_env({"CARET_AGENT_COMMAND": "my-agent {prompt}", "CARET_AGENT": "echo"})
@@ -759,8 +867,8 @@ class StoreTests(unittest.TestCase):
         self.assertIsNone(server.backend.store.read_session("../../etc/passwd"))
         status, body, _ = server.request(
             "POST",
-            "/v1/dictation/sessions/..%2F..%2Fetc/transcript",
-            body={"client_chunk_count": 1, "client_total_duration_ms": 100},
+            "/v2/sessions/..%2F..%2Fetc/ack",
+            body={},
         )
         self.assertIn(status, (400, 404), body)
 

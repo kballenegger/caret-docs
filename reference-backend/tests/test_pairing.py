@@ -35,12 +35,12 @@ class _PairingCase(unittest.TestCase):
     def mint(self, server: TestServer, **body):
         payload = {"server_url": SERVER_URL}
         payload.update(body)
-        return server.request("POST", "/v1/pairing/tokens", body=payload)
+        return server.request("POST", "/v2/pairing/tokens", body=payload)
 
     def claim(self, server: TestServer, token: str, *, url: str = SERVER_URL):
         return server.request(
             "POST",
-            "/v1/pairing/claim",
+            "/v2/pairing/claim",
             body={"pairing_token": token, "server_url": url},
             key=None,
         )
@@ -89,7 +89,7 @@ class ClaimTests(_PairingCase):
         self.assertEqual(body["token_id"], minted["token_id"])
         # The client should not have to make a second call to find out what
         # it just paired with.
-        self.assertTrue(body["capabilities"]["dictation"])
+        self.assertTrue(body["capabilities"]["dictate"])
         self.assertTrue(body["readiness"]["ready"])
 
     def test_claiming_is_anonymous_because_the_client_has_no_key_yet(self):
@@ -134,7 +134,7 @@ class ClaimTests(_PairingCase):
         server = self.server()
         for body in ({"server_url": SERVER_URL}, {"pairing_token": "x"}):
             status, payload, _ = server.request(
-                "POST", "/v1/pairing/claim", body=body, key=None
+                "POST", "/v2/pairing/claim", body=body, key=None
             )
             self.assertEqual(status, 400, payload)
 
@@ -176,7 +176,7 @@ class RevocationTests(_PairingCase):
         server = self.server()
         _, minted, _ = self.mint(server)
         status, body, _ = server.request(
-            "POST", "/v1/pairing/revoke", body={"token_id": minted["token_id"]}
+            "POST", "/v2/pairing/revoke", body={"token_id": minted["token_id"]}
         )
         self.assertEqual(status, 200, body)
         self.assertEqual(body["revoked"], 1)
@@ -188,7 +188,7 @@ class RevocationTests(_PairingCase):
         server = self.server()
         tokens = [self.mint(server)[1] for _ in range(3)]
         status, body, _ = server.request(
-            "POST", "/v1/pairing/revoke", body={"all": True}
+            "POST", "/v2/pairing/revoke", body={"all": True}
         )
         self.assertEqual(status, 200, body)
         self.assertEqual(body["revoked"], 3)
@@ -198,7 +198,7 @@ class RevocationTests(_PairingCase):
 
     def test_revoking_an_unknown_token_is_a_404_not_a_silent_success(self):
         status, body, _ = self.server().request(
-            "POST", "/v1/pairing/revoke", body={"token_id": "pt_deadbeef"}
+            "POST", "/v2/pairing/revoke", body={"token_id": "pt_deadbeef"}
         )
         self.assertEqual(status, 404, body)
         self.assertEqual(body["error"]["code"], "pairing_token_invalid")
@@ -206,7 +206,7 @@ class RevocationTests(_PairingCase):
     def test_listing_shows_state_but_never_the_token_or_the_key(self):
         server = self.server()
         _, minted, _ = self.mint(server)
-        status, body, _ = server.request("GET", "/v1/pairing/tokens")
+        status, body, _ = server.request("GET", "/v2/pairing/tokens")
         self.assertEqual(status, 200, body)
         entry = body["tokens"][0]
         self.assertEqual(entry["token_id"], minted["token_id"])
@@ -219,22 +219,22 @@ class RevocationTests(_PairingCase):
         server = self.server()
         _, minted, _ = self.mint(server)
         self.claim(server, minted["pairing_token"])
-        _, body, _ = server.request("GET", "/v1/pairing/tokens")
+        _, body, _ = server.request("GET", "/v2/pairing/tokens")
         self.assertEqual(body["tokens"][0]["state"], "claimed")
 
 
 class AuthTests(_PairingCase):
     def test_minting_requires_a_key(self):
         status, body, _ = self.server().request(
-            "POST", "/v1/pairing/tokens", body={"server_url": SERVER_URL}, key=None
+            "POST", "/v2/pairing/tokens", body={"server_url": SERVER_URL}, key=None
         )
         self.assertEqual(status, 401, body)
 
     def test_listing_and_revoking_require_a_key(self):
         server = self.server()
         for method, path, body in (
-            ("GET", "/v1/pairing/tokens", None),
-            ("POST", "/v1/pairing/revoke", {"all": True}),
+            ("GET", "/v2/pairing/tokens", None),
+            ("POST", "/v2/pairing/revoke", {"all": True}),
         ):
             status, payload, _ = server.request(method, path, body=body, key=None)
             self.assertEqual(status, 401, payload)
@@ -245,7 +245,7 @@ class AuthTests(_PairingCase):
         server = self.server(api_keys=("first-key", "second-key"))
         _, minted, _ = server.request(
             "POST",
-            "/v1/pairing/tokens",
+            "/v2/pairing/tokens",
             body={"server_url": SERVER_URL},
             key="second-key",
         )
@@ -269,8 +269,8 @@ class ReadinessTests(_PairingCase):
         status, body, _ = self.mint(server)
         self.assertEqual(status, 200, body)
         _, claimed, _ = self.claim(server, body["pairing_token"])
-        self.assertFalse(claimed["capabilities"]["draft"])
-        self.assertTrue(claimed["capabilities"]["dictation"])
+        self.assertFalse(claimed["capabilities"]["ask"])
+        self.assertTrue(claimed["capabilities"]["dictate"])
 
 
 class TransportTests(_PairingCase):
@@ -284,7 +284,7 @@ class TransportTests(_PairingCase):
 
     def test_a_server_url_is_required(self):
         status, body, _ = self.server().request(
-            "POST", "/v1/pairing/tokens", body={}
+            "POST", "/v2/pairing/tokens", body={}
         )
         self.assertEqual(status, 400, body)
 
@@ -293,11 +293,11 @@ class TransportTests(_PairingCase):
         status, body, _ = self.mint(server)
         self.assertEqual(status, 404, body)
         self.assertEqual(body["error"]["code"], "pairing_disabled")
-        _, health, _ = server.request("GET", "/v1/health", key=None)
+        _, health, _ = server.request("GET", "/v2/health", key=None)
         self.assertEqual(health["routes"]["pairing"], {"route": "off"})
 
     def test_health_advertises_that_the_qr_carries_no_key(self):
-        _, health, _ = self.server().request("GET", "/v1/health", key=None)
+        _, health, _ = self.server().request("GET", "/v2/health", key=None)
         self.assertEqual(
             health["routes"]["pairing"],
             {"route": "token", "single_use": True, "carries_api_key": False},

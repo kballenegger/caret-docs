@@ -1,4 +1,4 @@
-"""A small, complete `caret/v1` backend. Python standard library only.
+"""A small, complete `caret/v2` backend. Python standard library only.
 
     caret_backend.server      contract: routing, auth, validation, async jobs
     caret_backend.store       filesystem state: sessions, chunks, jobs

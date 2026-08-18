@@ -5,7 +5,7 @@ description: Connect the Caret iOS keyboard to this machine's Hermes agent. Use 
 
 # Connect Caret to Hermes
 
-Caret is an iOS keyboard that drafts messages by calling a `caret/v1`
+Caret is an iOS keyboard that drafts messages by calling a `caret/v2`
 HTTP backend the user controls. Your job: deploy the canonical Caret
 reference backend on this machine, configured to use the stock Hermes
 CLI as its Ask adapter, then hand the user the URL and API key to paste
@@ -48,12 +48,12 @@ the authoritative version of these steps. In short:
    ```sh
    python3 -m caret_backend --check
    python3 -m caret_backend --port 8787 &
-   curl -s http://127.0.0.1:8787/v1/health | python3 -m json.tool
+   curl -s http://127.0.0.1:8787/v2/health | python3 -m json.tool
    ```
 
    Health must report `"status": "ok"`,
    `"readiness": {"ready": true, "blockers": []}`, honest capabilities
-   with `"dictation": true`, and
+   with `"dictate": true`, and
    `"adapters": {"agent": "hermes", …}`. Run one real draft and one real
    transcription with the key; a wrong key must get 401.
 

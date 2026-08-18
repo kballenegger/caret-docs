@@ -79,8 +79,8 @@ Agent presets (`CARET_AGENT`)
     definition — neither STT nor Imagine routes through it.
 
 `off`
-    No Ask adapter. Ask is optional in caret/v1: a backend with no agent
-    reports `draft: false` and answers 404 rather than pretending with a
+    No Ask adapter. Ask is optional in caret/v2: a backend with no agent
+    reports `ask: false` and answers 404 rather than pretending with a
     stand-in.
 
 `echo`
@@ -240,7 +240,7 @@ def _run(argv: list[str], *, stdin_text: str | None, timeout: int, what: str) ->
     except subprocess.TimeoutExpired as exc:
         raise CaretError(
             504,
-            "draft_timeout" if what == "agent" else "transcription_failed",
+            "ask_timeout" if what == "agent" else "transcription_failed",
             f"{what} did not answer within {timeout}s",
             retryable=True,
         ) from exc
@@ -327,7 +327,7 @@ def post_json(
     timeout: int,
     what: str,
 ) -> dict:
-    """One JSON POST, with every failure shaped like the caret/v1 envelope.
+    """One JSON POST, with every failure shaped like the caret/v2 envelope.
 
     Non-200, unreachable, timeout and non-JSON all become a retryable 503
     naming `what` — the caller never sees a urllib exception. The bearer
@@ -519,10 +519,10 @@ class GrokBotImagingAgent(GrokBotAgent):
 class NullAgent:
     """No Ask adapter configured.
 
-    Ask is optional in caret/v1, so "no agent" is a legitimate, honest
-    configuration — a dictation-only backend. What is not legitimate is
+    Ask is optional in caret/v2, so "no agent" is a legitimate, honest
+    configuration — a dictate-only backend. What is not legitimate is
     pretending: this agent never answers, the backend reports
-    `draft: false`, and `/v1/draft` is a 404. Anything that reaches these
+    `ask: false`, and `/v2/ask` is a 404. Anything that reaches these
     methods anyway is a bug in the caller, and says so."""
 
     name: str = "off"
@@ -906,19 +906,20 @@ def agent_from_env(env: dict[str, str] | None = None) -> object:
 
 # Capability routing
 # ------------------
-# Every surface routes through the selected agent when — and only when —
+# Every operation routes through the selected agent when — and only when —
 # that agent adapter verifiably provides the capability:
 #
-#   Ask        the agent, when there is one. Ask is OPTIONAL in caret/v1:
+#   Ask        the agent, when there is one. Ask is OPTIONAL in caret/v2:
 #              `CARET_AGENT=off` (or `auto` with nothing installed) is a
-#              valid dictation-only backend that reports `draft: false`
-#              and answers /v1/draft with 404 rather than faking it.
+#              valid dictate-only backend that reports `ask: false`
+#              and answers /v2/ask with 404 rather than faking it.
 #   Cleanup    the agent, as a constrained text-only cleanup request
 #              (POLISH_FRAMING): fix the transcript, take no action. The
 #              CLI presets run in their read-only modes, so "no action
 #              tools" is enforced where the runtime can enforce it. With
-#              no agent, cleanup is off and dictation returns the raw
-#              transcript — still a complete, valid backend.
+#              no agent, cleanup is off and Dictate returns the raw
+#              transcript (or, for text input, the text unchanged) —
+#              still a complete, valid backend.
 #   STT        the agent only if its adapter implements `transcribe()`.
 #              NONE of the shipped presets does: no documented, stable
 #              non-interactive audio-transcription interface could be
@@ -957,7 +958,7 @@ def transcriber_from_env(
     routes through the agent when it verifiably transcribes, then falls
     back to local OpenWhisper when its executable is present.
 
-    Dictation is mandatory in caret/v1, so `auto` finding nothing is not a
+    Dictation is mandatory in caret/v2, so `auto` finding nothing is not a
     working configuration — it returns `NullTranscriber`, which the server
     reports as a `not_ready` backend with a `no_stt_adapter` blocker, and
     which `--check` exits non-zero on. This function does not raise for it:

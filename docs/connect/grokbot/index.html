@@ -92,7 +92,7 @@ Authorization: Bearer &lt;CARET_GROKBOT_BEARER&gt;     // only if you set one
 → 200  {"text": "&lt;the cleaned transcript&gt;"}
 
 // Imagine — only when CARET_GROKBOT_IMAGE=on
-{"task": "imagine", "prompt": "…", "aspect_ratio": "1:1", "quality": "standard"}
+{"task": "imagine", "prompt": "…", "aspect_ratio": "1:1", "quality": "high"}
 → 200  {"image_base64": "&lt;base64 of a PNG&gt;"}</code></pre>
   <table>
     <tr><th>GrokBot answers</th><th>The backend answers Caret</th></tr>
@@ -107,7 +107,7 @@ Authorization: Bearer &lt;CARET_GROKBOT_BEARER&gt;     // only if you set one
     <tr><td>Non-JSON, or JSON without the expected field</td>
         <td><code>503 internal_error</code>, retryable</td></tr>
     <tr><td>Unreachable / too slow</td>
-        <td><code>503 internal_error</code> / <code>504 draft_timeout</code>,
+        <td><code>503 internal_error</code> / <code>504 ask_timeout</code>,
             retryable</td></tr>
   </table>
   <p>
@@ -182,7 +182,7 @@ python3 -m caret_backend --port 8787</code></pre>
   </p>
   <p>
     This is not optional. Dictation is the one capability every valid
-    <code>caret/v1</code> backend must serve: with no STT adapter resolved,
+    <code>caret/v2</code> backend must serve: with no STT adapter resolved,
     health reports <code>"status": "not_ready"</code> with the
     <code>no_stt_adapter</code> blocker, <code>--check</code> exits non-zero,
     and the connection QR refuses to generate. A GrokBot deployment that
@@ -190,8 +190,8 @@ python3 -m caret_backend --port 8787</code></pre>
   </p>
 
   <h2>5 · Smoke-test the whole chain</h2>
-  <pre><code>curl -s localhost:8787/v1/health | python3 -m json.tool
-curl -s -X POST localhost:8787/v1/draft \
+  <pre><code>curl -s localhost:8787/v2/health | python3 -m json.tool
+curl -s -X POST localhost:8787/v2/ask \
   -H "Authorization: Bearer $CARET_API_KEYS" \
   -H 'Content-Type: application/json' \
   -d '{"client_request_id":"smoke-1",
@@ -241,7 +241,7 @@ curl -s -X POST localhost:8787/v1/draft \
     <tr><td><code>503 internal_error: GrokBot returned a non-PNG image</code></td>
         <td><code>image_base64</code> must decode to a PNG. JPEG, a URL, or a
             data-URI prefix will all land here.</td></tr>
-    <tr><td><code>504 draft_timeout</code></td>
+    <tr><td><code>504 ask_timeout</code></td>
         <td>The whole chain must answer inside
             <code>CARET_AGENT_TIMEOUT_S</code> (90 s default).</td></tr>
     <tr><td>Health says <code>not_ready</code></td>

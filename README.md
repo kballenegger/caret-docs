@@ -14,7 +14,7 @@ your typing.
 > [LICENSE](LICENSE).
 
 ```
-reference-backend/  THE PRIMARY PATH — one complete caret/v1 backend in
+reference-backend/  THE PRIMARY PATH — one complete caret/v2 backend in
                     stdlib Python with pluggable, capability-routed
                     adapters: your agent answers Ask, local OpenWhisper
                     takes dictation by default, every route swappable
@@ -23,7 +23,7 @@ integrations/       native packaging where a runtime supports it —
                     evidence-based plugin decision matrix
 docs/               the docs site: connect runbooks + implementation guide
 agent-prompts/      prompts your coding agent can follow end to end
-openapi.yaml        the caret/v1 contract — the normative document
+openapi.yaml        the caret/v2 contract — the normative document
 scripts/            the public-repo guard and repo checks
 ```
 
@@ -73,16 +73,16 @@ configure (`CARET_STT_HTTP_URL`, `CARET_STT_COMMAND`). Only then does
 text reach your agent, which answers Ask and cleans up transcripts (as a
 constrained text-only request). Imagine uses the image provider you
 configure — or GrokBot's own, with `CARET_GROKBOT_IMAGE=on` — and stays
-off otherwise. `GET /v1/health` reports the resolved route per surface.
+off otherwise. `GET /v2/health` reports the resolved route per operation.
 
-**Dictation is the one capability that is not optional.** A valid
-`caret/v1` backend takes speech and advertises `"dictation": true`. With
+**Dictate is the one capability that is not optional.** A valid
+`caret/v2` backend takes speech and advertises `"dictate": true`. With
 no STT adapter resolved, `--check` fails and health reports
 `"status": "not_ready"` with a `no_stt_adapter` blocker rather than
 presenting itself as a working backend. Ask and Imagine stay optional and
 are reported honestly off.
 
-## The advanced path: implement caret/v1 yourself
+## The advanced path: implement caret/v2 yourself
 
 Want a backend you fully own — a different language, your own process
 model? Read [`docs/your-agent/`](docs/your-agent/) — one page, every
@@ -98,22 +98,31 @@ python3 reference-backend/conformance.py --base-url https://your-host --api-key 
 
 ## What the contract asks of you
 
-Six endpoints. Health and the three dictation endpoints are required.
+Three product operations over one mode-neutral audio transport. Every
+operation takes the same discriminated `input` object — `{"type":
+"text", ...}` or `{"type": "session", ...}` — and an operation called
+with a session id atomically seals, transcribes, and consumes the
+session. There is no finalize endpoint, and a session carries exactly
+one terminal result.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /v1/health` | Say who you are and what you can do |
-| `POST /v1/dictation/sessions` | Open an audio session |
-| `PUT /v1/dictation/sessions/{id}/chunks/{seq}` | Upload audio as it is spoken |
-| `POST /v1/dictation/sessions/{id}/transcript` | Finish and transcribe |
-| `POST /v1/draft` | Ask — write or rewrite text (optional) |
-| `POST /v1/imagine` | Generate an image (optional) |
+| `GET /v2/health` | Say who you are and what you can do |
+| `POST /v2/sessions` | Open a chunked audio session (mode-neutral) |
+| `PUT /v2/sessions/{id}/chunks/{seq}` | Upload audio as it is spoken |
+| `POST /v2/sessions/{id}/ack` | Acknowledge a terminal result (optional) |
+| `POST /v2/dictate` | Dictate — transcribe and clean up (required) |
+| `POST /v2/ask` | Ask — write or rewrite text (optional) |
+| `POST /v2/imagine` | Generate an image (optional) |
 
 `capabilities` in your health response decides what the keyboard shows,
-and it must be true. Dictation is required: declare
-`{"draft": false, "dictation": true, "imagine": false}` and you have a
-legitimate, complete backend. Declare `"dictation": false` and you do
+and it must be true. Dictate is required: declare
+`{"dictate": true, "ask": false, "imagine": false}` and you have a
+legitimate, complete backend. Declare `"dictate": false` and you do
 not have a Caret backend — say `"status": "not_ready"` instead.
+
+`caret/v1` is deprecated and no longer documented; V2 is the only
+supported contract.
 
 ## Checking a change to this repository
 

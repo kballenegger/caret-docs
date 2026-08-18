@@ -32,7 +32,7 @@ STT/Imagine through an agent adapter only when that adapter implements
 and health's `routes` block reports what actually resolved.
 
 Dictation is the exception to "every capability is optional": a valid
-`caret/v1` backend must serve it. No runtime in the table above provides
+`caret/v2` backend must serve it. No runtime in the table above provides
 it, so every row depends on the backend's own STT lane, and a backend
 with none reports `status: not_ready` rather than pretending to be a
 Caret backend. Ask and Imagine stay optional and are reported honestly

@@ -138,7 +138,7 @@ def _pair(args) -> int:
         return 2
     body = json.dumps({"server_url": args.url, "ttl_seconds": args.ttl}).encode()
     request = urllib.request.Request(
-        args.local.rstrip("/") + "/v1/pairing/tokens",
+        args.local.rstrip("/") + "/v2/pairing/tokens",
         data=body,
         headers={
             "Content-Type": "application/json",
@@ -168,12 +168,12 @@ def _pair(args) -> int:
     print(f"  single use, expires {payload['expires_at']} "
           f"(in {payload['expires_in_seconds']}s)")
     print(f"  token id {payload['token_id']} — revoke with:")
-    print(f"    curl -sX POST {args.local.rstrip('/')}/v1/pairing/revoke \\")
+    print(f"    curl -sX POST {args.local.rstrip('/')}/v2/pairing/revoke \\")
     print('      -H "Authorization: Bearer $CARET_API_KEYS" \\')
     print(f"      -H 'Content-Type: application/json' -d '{{\"token_id\":\"{payload['token_id']}\"}}'")
     print()
     print("  This is a one-time token, not your API key — a client exchanges")
-    print("  it once at POST /v1/pairing/claim and it dies there.")
+    print("  it once at POST /v2/pairing/claim and it dies there.")
     print("  The Caret app does not use this flow; it scans a connection QR")
     print("  (python3 -m caret_backend --qr --url …). Pairing tokens are for")
     print("  your own clients and for out-of-band handover.")

@@ -7,7 +7,7 @@
 > one. Take *this* prompt only when your user wants a backend they
 > build and fully own.
 
-You are a coding agent. Your job is to stand up a personal `caret/v1`
+You are a coding agent. Your job is to stand up a personal `caret/v2`
 backend for your user — the HTTP API that Caret, an agentic iOS keyboard,
 calls to draft messages, take dictation and generate images. When it is
 running, your user pastes a URL and an API key into the Caret app and the
@@ -160,7 +160,7 @@ the old one.
 Check yourself against this list before you tell the user you are
 finished. Every line is something you can verify by running a command.
 
-- [ ] `GET /v1/health` reports `capabilities` that are true right now —
+- [ ] `GET /v2/health` reports `capabilities` that are true right now —
       every surface reported `true` actually works, and every one that
       does not is reported `false`.
 - [ ] `conformance.py` exits `0` against the deployed URL over `https://`.

@@ -24,8 +24,8 @@ Runbook with the full contract:
 - **Never claim a capability until you have tested it end to end.** If your
   image capability is not enabled, leave Imagine off. Honest "off" is a
   valid backend; a false "on" is a broken keyboard.
-- After adding Ask or Imagine, make `/v1/health` advertise the matching
-  capability so Caret shows the surface: `capabilities.draft: true` for Ask
+- After adding Ask or Imagine, make `/v2/health` advertise the matching
+  capability so Caret shows the surface: `capabilities.ask: true` for Ask
   and `capabilities.imagine: true` for Imagine. Keep either `false` until
   its real endpoint passes a round-trip test.
 - Secrets go in the host's secret store or environment, never into a repo,
@@ -56,7 +56,7 @@ Authorization: Bearer <CARET_GROKBOT_BEARER>     // if you set one
 {"task": "ask",     "prompt": "<framed drafting prompt>"}  -> 200 {"text": "..."}
 {"task": "cleanup", "prompt": "<framed cleanup prompt>"}   -> 200 {"text": "..."}
 {"task": "imagine", "prompt": "...",
- "aspect_ratio": "1:1", "quality": "standard"}             -> 200 {"image_base64": "<base64 PNG>"}
+ "aspect_ratio": "1:1", "quality": "high"}                 -> 200 {"image_base64": "<base64 PNG>"}
 ```
 
 - **Ask** — your own LLM, answering the framed prompt.
@@ -88,7 +88,7 @@ error rather than a guess.
 
 ## 4. Dictation is mandatory — and it is not yours
 
-A valid `caret/v1` backend must take speech. No stable non-interactive
+A valid `caret/v2` backend must take speech. No stable non-interactive
 GrokBot transcription interface is claimed here, so speech does **not** route
 through your endpoint. Configure the backend's own STT lane:
 
@@ -125,14 +125,14 @@ verify it comes back after a forced restart and after a reboot.
 
 ```sh
 python3 -m caret_backend --check
-curl -s https://<your-url>/v1/health | python3 -m json.tool
+curl -s https://<your-url>/v2/health | python3 -m json.tool
 ```
 
 Confirm, from the phone's network:
 
 - `readiness.ready` is `true` and `blockers` is empty;
-- `capabilities.dictation` is `true` — non-negotiable;
-- `capabilities.draft` is `true` and `adapters.agent` is `grokbot`;
+- `capabilities.dictate` is `true` — non-negotiable;
+- `capabilities.ask` is `true` and `adapters.agent` is `grokbot`;
 - `capabilities.imagine` matches reality — `true` only if you tested a real
   image round-trip, `false` otherwise;
 - `routes` matches the live setup;

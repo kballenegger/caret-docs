@@ -1,6 +1,6 @@
 # Caret reference backend
 
-THE canonical Caret reference implementation: one complete `caret/v1`
+THE canonical Caret reference implementation: one complete `caret/v2`
 backend in stdlib Python with pluggable adapters. The Ask adapter
 connects the agent you already run — Hermes, Claude Code, Codex,
 GrokBot, OpenClaw, or any hosted agent over HTTP — and the STT adapter
@@ -8,8 +8,16 @@ provides dictation and spoken input, defaulting to local
 [OpenWhisper](https://github.com/openai/whisper). One backend, varied
 Ask and STT providers, all selected by environment variables.
 
-**Dictation is mandatory; Ask and Imagine are optional.** A valid
-`caret/v1` backend takes speech and advertises `dictation: true`. With no
+The V2 surface is three product operations — `POST /v2/dictate`,
+`POST /v2/ask`, `POST /v2/imagine` — over one mode-neutral audio
+transport (`POST /v2/sessions` + chunk uploads). Every operation takes
+the same discriminated `input` object (`text` or `session`), and an
+operation called with a session id atomically seals + transcribes +
+consumes it: there is no finalize endpoint, and a session carries
+exactly one terminal result.
+
+**Dictate is mandatory; Ask and Imagine are optional.** A valid
+`caret/v2` backend takes speech and advertises `dictate: true`. With no
 STT adapter resolved this backend reports `status: not_ready` with a
 `no_stt_adapter` blocker and `--check` exits non-zero — it will not
 pretend to be a usable Caret backend. Ask and Imagine each report
@@ -28,7 +36,7 @@ caret_backend/errors.py     the error envelope
 caret_backend/connect.py    the caret-connect:v1 QR payload the app scans
 caret_backend/qrcode.py     a dependency-free QR encoder (terminal + PNG)
 caret_backend/pairing.py    short-lived pairing tokens (server extension)
-conformance.py              a checker you can run against any caret/v1 backend
+conformance.py              a checker you can run against any caret/v2 backend
 tests/                      hermetic tests, no network, no model calls
 ```
 
@@ -61,18 +69,22 @@ off rather than substituting a stand-in that answers like a real agent.
 your `PATH`. Check what you got:
 
 ```sh
-curl -s localhost:8787/v1/health | python3 -m json.tool
+curl -s localhost:8787/v2/health | python3 -m json.tool
 ```
 
 ```json
 {
   "status": "ok",
-  "contract": "caret/v1",
+  "contract": "caret/v2",
   "capabilities": {
-    "draft": true,
-    "dictation": true,
+    "dictate": true,
+    "ask": true,
     "imagine": false,
-    "input_modes": {"draft": ["text", "audio"], "dictation": ["audio"]}
+    "input_modes": {
+      "dictate": ["text", "session"],
+      "ask": ["text", "session"],
+      "imagine": []
+    }
   },
   "readiness": {"ready": true, "blockers": []}
 }
@@ -89,15 +101,15 @@ blocker, not a capability gap:
 ```json
 {
   "status": "not_ready",
-  "capabilities": {"draft": true, "dictation": false, "imagine": false},
+  "capabilities": {"dictate": false, "ask": true, "imagine": false},
   "readiness": {"ready": false,
                 "blockers": [{"code": "no_stt_adapter", "message": "…"}]}
 }
 ```
 
-That shape — Ask on, dictation off — is the one configuration this
+That shape — Ask on, Dictate off — is the one configuration this
 contract rejects. `status` is `ok` when ready, `degraded` when only
-`no_api_keys` stands, and `not_ready` whenever dictation is off.
+`no_api_keys` stands, and `not_ready` whenever Dictate is off.
 
 Then run the conformance checker against yourself:
 
@@ -124,7 +136,7 @@ key is ever written into this repository.
 | `CARET_GROKBOT_URL` | *(none)* | `grokbot` only, **required**: the one endpoint your GrokBot deployment exposes, discriminated by `task`. |
 | `CARET_GROKBOT_BEARER` | *(none)* | `grokbot` only: sent as `Authorization: Bearer …`, never logged. |
 | `CARET_GROKBOT_IMAGE` | `off` | `grokbot` only: `on` routes Imagine to GrokBot's own image capability. Only `on` or `off`; anything else is a startup error rather than a guess. |
-| `CARET_AGENT_TIMEOUT_S` | `90` | Per-draft budget. Overrun is `504 draft_timeout`. |
+| `CARET_AGENT_TIMEOUT_S` | `90` | Per-request agent budget. Overrun is `504 ask_timeout`. |
 | `CARET_STT` | `auto` | STT preset: `agent` (only if the agent adapter verifiably transcribes — no shipped preset does), `openwhisper`, `http`, `echo` (tests only), `off`, or `auto` (agent if it transcribes, else `http` when `CARET_STT_HTTP_URL` is set, else OpenWhisper when `whisper` is installed, else off). |
 | `CARET_STT_COMMAND` | *(none)* | Any speech-to-text command. Overrides the preset. `{audio}` is a WAV path; transcript on stdout, or in `{out_dir}/audio.txt` when the template names `{out_dir}`. |
 | `CARET_STT_MODEL` | `turbo` | OpenWhisper model name. |
@@ -135,7 +147,7 @@ key is ever written into this repository.
 | `CARET_POLISH` | `on` | `off` disables transcript clean-up, saving one model call per dictation. |
 | `CARET_RATE_LIMIT_PER_MINUTE` | `120` | Per key. `0` disables the limit. |
 | `CARET_LOG_LEVEL` | `INFO` | Standard Python levels. |
-| `CARET_PAIRING` | `on` | `off` disables the pairing-token extension (`/v1/pairing/*`). Does not affect `--qr`, which is a local command. |
+| `CARET_PAIRING` | `on` | `off` disables the pairing-token extension (`/v2/pairing/*`). Does not affect `--qr`, which is a local command. |
 
 Configuration is validated at startup, and `python3 -m caret_backend
 --check` prints the resolved adapters and capabilities without serving. A
@@ -150,11 +162,11 @@ Every surface routes through the selected agent when — and only when —
 its adapter verifiably provides that capability, and health's `routes`
 extension block reports the resolved route per surface, truthfully:
 
-| Surface | Required? | Route |
+| Operation | Required? | Route |
 | --- | --- | --- |
-| Dictation / STT | **Required** | Through the agent **only if its adapter implements `transcribe()`**. None of the shipped presets does — no documented, stable non-interactive audio-transcription interface could be verified for Hermes, OpenClaw, Claude Code, Codex, GrokBot, or the custom-http contract (text-JSON by definition) — so STT resolves to local OpenWhisper by default, or the `http`/command adapter you configure. With none resolved the backend is `not_ready`; this is the one surface that is not allowed to be off. |
-| Ask | Optional | The agent, when one is configured. `CARET_AGENT=off` (or `auto` with nothing installed) reports `draft: false` and answers `/v1/draft` with `404 not_found` rather than faking a reply — a valid dictation-only backend. |
-| Cleanup | Optional | The agent, as a constrained text-only cleanup request (`POLISH_FRAMING`: fix the transcript, do not answer it, take no action). The CLI presets run in their read-only modes, so "no action tools" is enforced where the runtime can enforce it. With no agent, dictation returns the raw transcript. |
+| Dictate / STT | **Required** | Through the agent **only if its adapter implements `transcribe()`**. None of the shipped presets does — no documented, stable non-interactive audio-transcription interface could be verified for Hermes, OpenClaw, Claude Code, Codex, GrokBot, or the custom-http contract (text-JSON by definition) — so STT resolves to local OpenWhisper by default, or the `http`/command adapter you configure. With none resolved the backend is `not_ready`; this is the one operation that is not allowed to be off. |
+| Ask | Optional | The agent, when one is configured. `CARET_AGENT=off` (or `auto` with nothing installed) reports `ask: false` and answers `/v2/ask` with `404 not_found` rather than faking a reply — a valid dictate-only backend. |
+| Cleanup | Optional | The agent, as a constrained text-only cleanup request (`POLISH_FRAMING`: fix the transcript, do not answer it, take no action), reported inside the `dictate` route. The CLI presets run in their read-only modes, so "no action tools" is enforced where the runtime can enforce it. With no agent, Dictate returns the raw transcript (or, for text input, the text unchanged). |
 | Imagine | Optional | Through the agent **only if its adapter implements `generate()`**. Exactly one shipped preset does: `grokbot` with `CARET_GROKBOT_IMAGE=on`, which serves Imagine from GrokBot's own image capability. Otherwise Imagine uses `CARET_IMAGE_COMMAND` if you configure one, and reports honestly off. |
 
 If you integrate an agent that genuinely transcribes audio or renders
@@ -163,7 +175,7 @@ images, give its adapter a `transcribe(pcm, *, sample_rate)` /
 prefers it automatically. Check the resolved routes any time:
 
 ```sh
-curl -s localhost:8787/v1/health | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["routes"], indent=2))'
+curl -s localhost:8787/v2/health | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["routes"], indent=2))'
 ```
 
 ## The adapter boundary
@@ -223,7 +235,7 @@ preset does and does not give you:
   A model can ignore it.
 - The command runs with no terminal attached, so anything that would stop
   to ask you a question cannot be answered. The 90-second agent timeout is
-  the backstop, and you get a `504 draft_timeout` rather than a hang.
+  the backstop, and you get a `504 ask_timeout` rather than a hang.
 
 If you want the drafting call narrowed, do it with the documented
 `-t/--toolsets` flag, which restricts the run to the toolsets you name:
@@ -381,8 +393,8 @@ export CARET_IMAGE_COMMAND='my-image-tool --prompt {prompt} --out {out} --size {
 ```
 
 `{out}` is a PNG path the command must write. `{aspect_ratio}` is
-`square`, `landscape` or `portrait`; `{quality}` is `fast`, `standard` or
-`best`. If the file is missing or empty the request fails loudly.
+`1:1`, `3:2` or `2:3`; `{quality}` is `high`, `medium` or `low`. If the
+file is missing or empty the request fails loudly.
 
 ## Tests
 
@@ -393,7 +405,7 @@ python3 -m unittest discover -s tests -v
 Or, from the repository root, `make test` — the same suite, quieter, and
 the entrypoint any CI should call.
 
-83 tests, no network, no model calls, half a minute. They start a real
+208 tests, no network, no model calls, about a minute. They start a real
 server on a real socket and speak real HTTP to it, so routing, parsing and
 serialisation are all covered — only the agent itself is stubbed. The final
 test runs `conformance.py` against that server, so the checker you ship to
@@ -409,9 +421,9 @@ and let that terminate TLS. Caret requires `https://`.
 per device, and revoke by removing one from `CARET_API_KEYS` and
 restarting. Comparison is constant-time. Keys are never logged.
 
-**Readiness.** `--check` exits non-zero, and `/v1/health` reports
+**Readiness.** `--check` exits non-zero, and `/v2/health` reports
 `"status": "not_ready"` with a `no_stt_adapter` blocker, whenever no STT
-adapter resolves. Dictation is the one capability this contract requires;
+adapter resolves. Dictate is the one capability this contract requires;
 Ask and Imagine report honestly off. `"degraded"` means the server runs
 but `CARET_API_KEYS` is empty, so every authenticated route would 401.
 

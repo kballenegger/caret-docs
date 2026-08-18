@@ -1,8 +1,8 @@
-"""caret/v1 over `http.server`. Stdlib only.
+"""caret/v2 over `http.server`. Stdlib only.
 
 The whole contract lives here: routing, auth, validation, the one input
-model, the async job semantics, and the error envelope. Roughly the order
-you would implement it in yourself.
+model, atomic session consumption, the async job semantics, and the error
+envelope. Roughly the order you would implement it in yourself.
 
 Put a real reverse proxy in front of this in production — it terminates TLS
 and it is what the contract means by "https:// is required". This process
@@ -40,9 +40,9 @@ from .store import SESSION_TTL_SECONDS, Store, start_janitor
 
 log = logging.getLogger("caret")
 
-CONTRACT = "caret/v1"
+CONTRACT = "caret/v2"
 SERVICE = "caret-reference-backend"
-VERSION = "1.2.0"
+VERSION = "2.0.0"
 
 CHUNK_MAX_BYTES = 524_288
 CHUNK_TARGET_DURATION_MS = 3_000
@@ -53,8 +53,10 @@ MAX_TEXT_CHARS = 4_000
 MAX_APP_HINT_CHARS = 200
 RETRY_AFTER_SECONDS = 3
 
-ASPECT_RATIOS = ("square", "landscape", "portrait")
-QUALITIES = ("fast", "standard", "best")
+# The contract's advertised sets: aspect ratios as width:height strings,
+# qualities as the low/medium/high ladder. The first entry is the default.
+ASPECT_RATIOS = ("1:1", "3:2", "2:3")
+QUALITIES = ("high", "medium", "low")
 
 # Literal placeholders used in the public setup snippets. Refused as API
 # keys so a half-followed runbook fails at startup rather than in the wild.
@@ -145,7 +147,7 @@ class Backend:
         self.pairing_enabled = pairing_enabled
         self.pairing = pairing.PairingRegistry()
         self.limiter = RateLimiter(rate_limit_per_minute)
-        # /v1/pairing/claim is the one anonymous write on the contract, so
+        # /v2/pairing/claim is the one anonymous write on the contract, so
         # it gets its own budget rather than sharing the per-key one it
         # cannot use.
         self.claim_limiter = RateLimiter(30)
@@ -157,11 +159,12 @@ class Backend:
 
     @property
     def dictation_available(self) -> bool:
+        """Whether Dictate can take speech — the mandatory capability."""
         return not isinstance(self.transcriber, adapters.NullTranscriber)
 
     @property
     def ask_available(self) -> bool:
-        """Ask is optional. No agent configured is a valid dictation-only
+        """Ask is optional. No agent configured is a valid dictate-only
         backend — it just has to say so instead of answering with a
         stand-in."""
         return not isinstance(self.agent, adapters.NullAgent)
@@ -169,7 +172,7 @@ class Backend:
     @property
     def cleanup_available(self) -> bool:
         """Transcript cleanup is the agent doing constrained text work, so
-        it needs an agent. Without one, dictation returns the raw
+        it needs an agent. Without one, Dictate returns the raw
         transcript — still complete, still valid."""
         return self.polish_enabled and self.ask_available
 
@@ -180,7 +183,7 @@ class Backend:
     def readiness(self) -> dict:
         """Is this a valid, usable Caret backend?
 
-        Dictation is MANDATORY in caret/v1: a backend that cannot take
+        Dictate is MANDATORY in caret/v2: a backend that cannot take
         speech is not a Caret backend, whatever else it serves. Ask and
         Imagine are optional and their absence is reported, not fatal.
         Missing API keys are also blocking — a backend nobody can
@@ -194,7 +197,7 @@ class Backend:
             blockers.append(
                 {
                     "code": "no_stt_adapter",
-                    "message": "dictation is mandatory and no STT adapter is "
+                    "message": "dictate is mandatory and no STT adapter is "
                     "configured: install OpenWhisper (`brew install "
                     "openai-whisper`) or set CARET_STT_COMMAND / "
                     "CARET_STT_HTTP_URL",
@@ -211,19 +214,19 @@ class Backend:
         return {"ready": not blockers, "blockers": blockers}
 
     def capabilities(self) -> dict:
-        text_modes = ["text"] + (["audio"] if self.dictation_available else [])
-        modes = {}
-        if self.ask_available:
-            modes["draft"] = text_modes
-        if self.imagine_available:
-            modes["imagine"] = text_modes
-        if self.dictation_available:
-            modes["dictation"] = ["audio"]
+        """The caret/v2 capability shape: one boolean per operation, and
+        `input_modes` naming the accepted `input.type` values per
+        operation. An operation that is off has an empty mode list."""
+        session_mode = ["session"] if self.dictation_available else []
         return {
-            "draft": self.ask_available,
-            "dictation": self.dictation_available,
+            "dictate": self.dictation_available,
+            "ask": self.ask_available,
             "imagine": self.imagine_available,
-            "input_modes": modes,
+            "input_modes": {
+                "dictate": (["text"] + session_mode) if self.dictation_available else [],
+                "ask": (["text"] + session_mode) if self.ask_available else [],
+                "imagine": (["text"] + session_mode) if self.imagine_available else [],
+            },
         }
 
     # ----------------------------------------------------------------- auth
@@ -250,11 +253,11 @@ class Backend:
         valid = self.authenticate(auth_header) if presented else None
         readiness = self.readiness()
         # Three states, and the difference matters to whoever is reading:
-        #   ok         — a valid backend: dictation works and keys exist.
+        #   ok         — a valid backend: dictate works and keys exist.
         #   degraded   — usable-but-incomplete. Reserved for the keys-only
         #                gap, which is what a half-finished setup looks
         #                like.
-        #   not_ready  — dictation is off, so this is not a Caret backend
+        #   not_ready  — dictate is off, so this is not a Caret backend
         #                at all. Never dress that up as ok.
         if not self.dictation_available:
             status = "not_ready"
@@ -272,7 +275,7 @@ class Backend:
             "capabilities": self.capabilities(),
             "readiness": readiness,
             # Extension blocks (clients ignore unknown fields): which
-            # adapters this backend resolved to, and how each surface is
+            # adapters this backend resolved to, and how each operation is
             # routed — truthfully, per the capability-routing rules in
             # adapters.py. `--check` and the runbooks read these.
             "adapters": {
@@ -289,30 +292,39 @@ class Backend:
         }
 
     def routes(self) -> dict:
-        """How each surface is served: through the agent, through a local
-        or hosted adapter, or off. Never a hopeful answer."""
+        """How each operation is served: through the agent, through a local
+        or hosted adapter, or off. Never a hopeful answer.
+
+        `dictate` folds the whole Dictate pipeline into one entry: the STT
+        lane that hears the audio, and the constrained `cleanup` pass the
+        agent runs over the transcript (or over text input) before it is
+        returned."""
         agent_name = getattr(self.agent, "name", "?")
+        cleanup = (
+            {"route": "agent", "provider": agent_name, "constrained": True}
+            if self.cleanup_available
+            else {"route": "off"}
+        )
         routes = {
             "ask": (
                 {"route": "agent", "provider": agent_name}
                 if self.ask_available
                 else {"route": "off"}
             ),
-            "cleanup": (
-                {"route": "agent", "provider": agent_name, "constrained": True}
-                if self.cleanup_available
-                else {"route": "off"}
-            ),
         }
         if not self.dictation_available:
-            routes["dictation"] = {"route": "off"}
-        elif self.transcriber is self.agent:
-            routes["dictation"] = {"route": "agent", "provider": agent_name}
+            routes["dictate"] = {"route": "off"}
         else:
-            kind = "http" if isinstance(self.transcriber, adapters.HttpTranscriber) else "local"
-            routes["dictation"] = {
+            if self.transcriber is self.agent:
+                kind = "agent"
+            elif isinstance(self.transcriber, adapters.HttpTranscriber):
+                kind = "http"
+            else:
+                kind = "local"
+            routes["dictate"] = {
                 "route": kind,
                 "provider": getattr(self.transcriber, "name", "?"),
+                "cleanup": cleanup,
             }
         if not self.imagine_available:
             routes["imagine"] = {"route": "off"}
@@ -360,7 +372,7 @@ class Backend:
                 409,
                 "backend_not_ready",
                 f"refusing to pair: this is not a ready Caret backend yet "
-                f"({blockers}). See the readiness block in /v1/health.",
+                f"({blockers}). See the readiness block in /v2/health.",
             )
         server_url = payload.get("server_url")
         if not isinstance(server_url, str) or not server_url.strip():
@@ -450,42 +462,36 @@ class Backend:
 
     # ---------------------------------------------------------- input model
 
-    def parse_input(self, payload: dict, *, alias: str, alias_code: str) -> tuple[str, object]:
-        """Resolve the shared `input` object, or its 1.0 alias.
+    def parse_input(self, payload: dict) -> tuple[str, object]:
+        """Resolve the one discriminated `input` object.
 
-        Exactly one of them. Both, or neither, is `422 input_invalid` — the
-        alternative is guessing which one the client meant, and guessing
-        wrong is worse than a clear error.
+        caret/v2 has no aliases: the V1 top-level `instruction`/`prompt`
+        strings and the V1 `input.type: "audio"` discriminator are gone,
+        and anything but the two V2 shapes is `422 input_invalid` — the
+        alternative is guessing what the client meant, and guessing wrong
+        is worse than a clear error.
         """
         raw = payload.get("input")
-        alias_value = payload.get(alias)
-        if raw is not None and alias_value is not None:
-            raise input_invalid(f"provide exactly one of input or {alias}")
-        if raw is None and alias_value is None:
-            raise input_invalid(f"provide input or {alias}")
-
         if raw is None:
-            return "text", self._text(alias_value, field=alias, code=alias_code)
+            raise input_invalid("input is required")
         if not isinstance(raw, dict):
             raise input_invalid("input must be an object")
         kind = raw.get("type")
         if kind == "text":
-            # The alias keeps its 1.0 error code so existing clients keep
-            # matching on it; the new object reports the new code.
-            return "text", self._text(raw.get("text"), field="input.text", code="input_invalid")
-        if kind == "audio":
-            return "audio", self._audio(raw)
-        raise input_invalid('input.type must be "text" or "audio"')
+            return "text", self._text(raw.get("text"), field="input.text")
+        if kind == "session":
+            return "session", self._session_input(raw)
+        raise input_invalid('input.type must be "text" or "session"')
 
     @staticmethod
-    def _text(value, *, field: str, code: str) -> str:
+    def _text(value, *, field: str) -> str:
         if not isinstance(value, str):
             raise input_invalid(f"{field} must be a string")
         if not 1 <= len(value) <= MAX_TEXT_CHARS:
-            raise CaretError(422, code, f"{field} must be 1-{MAX_TEXT_CHARS} characters")
+            raise input_invalid(f"{field} must be 1-{MAX_TEXT_CHARS} characters")
         return value
 
-    def _audio(self, raw: dict) -> dict:
+    def _session_input(self, raw: dict) -> dict:
         if not self.dictation_available:
             raise CaretError(
                 422,
@@ -497,11 +503,15 @@ class Backend:
             raise input_invalid("input.session_id must be a non-empty string")
         polish = raw.get("polish", True)
         if not isinstance(polish, bool):
-            raise bad_request("input.polish must be a boolean")
+            raise input_invalid("input.polish must be a boolean")
         return {
             "session_id": session_id,
-            "client_chunk_count": _positive_int(raw, "client_chunk_count"),
-            "client_total_duration_ms": _positive_int(raw, "client_total_duration_ms"),
+            "client_chunk_count": _positive_int(
+                raw, "client_chunk_count", prefix="input."
+            ),
+            "client_total_duration_ms": _positive_int(
+                raw, "client_total_duration_ms", prefix="input."
+            ),
             "polish": polish,
         }
 
@@ -513,21 +523,16 @@ class Backend:
         if not isinstance(codec, str) or not codec:
             raise bad_request("codec is required")
         if codec != "pcm16":
-            raise CaretError(415, "unsupported_audio_codec", "v1 supports pcm16 only")
+            raise CaretError(415, "unsupported_audio_codec", "only pcm16 is supported")
         if payload.get("sample_rate_hz") != SAMPLE_RATE_HZ:
             raise bad_request(f"sample_rate_hz must be {SAMPLE_RATE_HZ}")
         if payload.get("channels") != 1:
             raise bad_request("channels must be 1")
-        intent = payload.get("intent", "dictate")
+        intent = payload.get("intent")
+        # `intent` is advisory by contract and never enforced: it may be
+        # absent, and the session may still be consumed by any operation.
         if intent is not None and intent not in ("dictate", "ask", "imagine"):
             raise bad_request("intent must be dictate, ask or imagine")
-        # `intent` is advisory by contract: reject early only for something
-        # this backend genuinely cannot do, never merely because the eventual
-        # consumer might differ.
-        if intent == "imagine" and not self.imagine_available:
-            raise CaretError(
-                422, "unsupported_input_type", "this backend does not implement imagine"
-            )
         if not self.dictation_available:
             raise CaretError(
                 422, "unsupported_input_type", "this backend has no transcriber configured"
@@ -574,9 +579,9 @@ class Backend:
     ) -> dict:
         meta = self._live_session(session_id)
         if meta.get("completed"):
-            # Claiming a session is not closing it: a `missing_chunks` reply
-            # binds the session to a surface and then explicitly asks for
-            # more audio. Only a terminal result seals it.
+            # Claiming a session is not sealing it: a `missing_chunks` reply
+            # binds the session to an operation and then explicitly asks for
+            # more audio. Only a terminal result (or an ACK) seals it.
             raise session_conflict(meta.get("consumed_by") or "another request")
         if seq < 0:
             raise bad_request("seq must be >= 0")
@@ -622,19 +627,41 @@ class Backend:
             "request_id": request_id,
         }
 
-    def claim_session(self, session_id: str, surface: str) -> dict:
-        """Bind a session to the one surface that will consume it."""
+    def claim_session(self, session_id: str, operation: str) -> dict:
+        """Bind a session to the one operation that will consume it."""
         meta = self._live_session(session_id)
+        if meta.get("acknowledged"):
+            raise session_conflict(meta.get("consumed_by") or "ack")
         consumed_by = meta.get("consumed_by")
-        if consumed_by and consumed_by != surface:
+        if consumed_by and consumed_by != operation:
             raise session_conflict(consumed_by)
         if not consumed_by:
-            meta = self.store.update_session(session_id, consumed_by=surface) or meta
+            meta = self.store.update_session(session_id, consumed_by=operation) or meta
         return meta
+
+    def ack_session(self, session_id: str, request_id: str) -> dict:
+        """Delete the server-side session data: audio and the cached
+        terminal result. Idempotent; ACKing an unconsumed session is
+        abandon+purge."""
+        meta = self.store.read_session(session_id)
+        if meta is None:
+            raise unknown_session(session_id)
+        already = bool(meta.get("acknowledged"))
+        if not already:
+            self.store.update_session(session_id, acknowledged=True, completed=True)
+            self.store.delete_session_audio(session_id)
+            for operation in ("dictate", "ask", "imagine"):
+                self.store.delete_job(f"{operation}:{session_id}")
+        return {
+            "session_id": session_id,
+            "acknowledged": True,
+            "already_acknowledged": already,
+            "request_id": request_id,
+        }
 
     # ------------------------------------------------------------- job model
 
-    def _poll_or_start(self, key: str, surface: str, work, request_id: str) -> dict:
+    def _poll_or_start(self, key: str, operation: str, work, request_id: str) -> dict:
         """The async contract in one place.
 
         First call registers the job and starts it; every identical re-post
@@ -644,7 +671,7 @@ class Backend:
         and a failed generation is not silently retried at the operator's
         expense.
         """
-        job = self.store.claim_job(key, request_id=request_id, surface=surface)
+        job = self.store.claim_job(key, request_id=request_id, surface=operation)
         if job["state"] == "running" and job["request_id"] == request_id:
             # We just created it (a poll would have found an older id).
             if self.run_jobs_inline:
@@ -654,7 +681,7 @@ class Backend:
                 threading.Thread(
                     target=self._execute,
                     args=(key, work),
-                    name=f"caret-job-{surface}",
+                    name=f"caret-job-{operation}",
                     daemon=True,
                 ).start()
         if job["state"] == "running":
@@ -712,10 +739,10 @@ class Backend:
 
     # --------------------------------------------------------------- audio
 
-    def _transcribe_session(self, audio: dict, surface: str) -> dict:
+    def _transcribe_session(self, audio: dict, operation: str) -> dict:
         """Shared by Dictate, spoken Ask and spoken Imagine. One code path."""
         session_id = audio["session_id"]
-        meta = self.claim_session(session_id, surface)
+        meta = self.claim_session(session_id, operation)
         pcm = self.store.read_audio(session_id, audio["client_chunk_count"])
         text = self.transcriber.transcribe(pcm, sample_rate=meta["sample_rate_hz"])
         if not text.strip():
@@ -730,15 +757,15 @@ class Backend:
         return {"transcript": text, "duration_ms": duration_ms}
 
     def _seal_session(self, session_id: str) -> None:
-        """A terminal result closes the session and drops its audio."""
+        """A terminal result seals the session and drops its audio."""
         self.store.update_session(session_id, completed=True)
         self.store.delete_session_audio(session_id)
 
-    def _audio_precheck(self, audio: dict, surface: str, request_id: str) -> dict | None:
+    def _session_precheck(self, audio: dict, operation: str, request_id: str) -> dict | None:
         """Completeness first: gaps are a 200, not an error, so the client
         can re-upload exactly what is missing and call again."""
         session_id = audio["session_id"]
-        self.claim_session(session_id, surface)
+        self.claim_session(session_id, operation)
         missing = self.store.missing_chunks(session_id, audio["client_chunk_count"])
         if missing:
             return {
@@ -749,29 +776,93 @@ class Backend:
             }
         return None
 
-    # ---------------------------------------------------------------- draft
+    # -------------------------------------------------------------- dictate
 
-    def draft(self, payload: dict, request_id: str) -> dict:
+    def dictate(self, payload: dict, request_id: str) -> dict:
+        """The mandatory operation, in both its shapes.
+
+        Session input seals + transcribes + consumes the session and
+        returns the cleaned transcript (`input.polish: false` skips the
+        cleanup). Text input runs the same constrained cleanup pass over
+        the provided raw text, idempotent by `client_request_id`; with no
+        agent configured the text comes back unchanged rather than the
+        request failing — mirroring the raw-transcript fallback."""
+        if not self.dictation_available:
+            # Dictate is mandatory, so this backend is not_ready and health
+            # already says so. The operation itself answers like any other
+            # unimplemented capability: an honest 404.
+            raise CaretError(
+                404,
+                "not_found",
+                "this backend has no transcriber configured: dictate is off",
+            )
+        client_request_id = _client_request_id(payload)
+        input_type, value = self.parse_input(payload)
+
+        if input_type == "text":
+            # The text path is synchronous. Cache successes only: a failed
+            # attempt must stay retryable under the same id.
+            cache_key = f"dictate:{client_request_id}"
+            cached = self.store.read_idempotent(cache_key)
+            if cached:
+                return cached
+            text = value
+            if self.cleanup_available:
+                try:
+                    text = self.agent.polish(text)
+                except CaretError as exc:
+                    # A cleanup failure must not lose the user's words.
+                    log.warning("cleanup failed (%s); returning raw text", exc.code)
+            body = {
+                "status": "complete",
+                "input_type": "text",
+                "text": text,
+                "request_id": request_id,
+            }
+            self.store.write_idempotent(cache_key, body)
+            return body
+
+        precheck = self._session_precheck(value, "dictate", request_id)
+        if precheck:
+            return {"text": None, "input_type": "session", **precheck}
+
+        def work() -> dict:
+            heard = self._transcribe_session(value, "dictate")
+            self._seal_session(value["session_id"])
+            return {
+                "status": "complete",
+                "input_type": "session",
+                "text": heard["transcript"],
+                "session_id": value["session_id"],
+                "missing_chunks": [],
+                "duration_ms": heard["duration_ms"],
+            }
+
+        return self._poll_or_start(
+            f"dictate:{value['session_id']}", "dictate", work, request_id
+        )
+
+    # ------------------------------------------------------------------ ask
+
+    def ask(self, payload: dict, request_id: str) -> dict:
         if not self.ask_available:
-            # Ask is optional, and `capabilities.draft: false` already told
+            # Ask is optional, and `capabilities.ask: false` already told
             # the client so. A backend with no agent answers 404 rather
-            # than echoing something back that reads like a draft.
+            # than echoing something back that reads like an answer.
             raise CaretError(
                 404,
                 "not_found",
                 "this backend has no agent configured: ask is off",
             )
         client_request_id = _client_request_id(payload)
-        input_type, value = self.parse_input(
-            payload, alias="instruction", alias_code="instruction_invalid"
-        )
+        input_type, value = self.parse_input(payload)
         visible_text = _optional_string(payload, "visible_text", MAX_TEXT_CHARS)
         app_hint = _optional_string(payload, "app_hint", MAX_APP_HINT_CHARS)
 
         if input_type == "text":
-            # Ask is synchronous by contract. Cache successes only: a failed
-            # attempt must stay retryable under the same id.
-            cache_key = f"draft:{client_request_id}"
+            # Typed Ask is synchronous by contract. Cache successes only: a
+            # failed attempt must stay retryable under the same id.
+            cache_key = f"ask:{client_request_id}"
             cached = self.store.read_idempotent(cache_key)
             if cached:
                 return cached
@@ -787,12 +878,12 @@ class Backend:
             self.store.write_idempotent(cache_key, body)
             return body
 
-        precheck = self._audio_precheck(value, "draft", request_id)
+        precheck = self._session_precheck(value, "ask", request_id)
         if precheck:
-            return {"text": None, "input_type": "audio", **precheck}
+            return {"text": None, "input_type": "session", **precheck}
 
         def work() -> dict:
-            heard = self._transcribe_session(value, "draft")
+            heard = self._transcribe_session(value, "ask")
             text = self.agent.draft(
                 instruction=heard["transcript"],
                 visible_text=visible_text,
@@ -802,14 +893,14 @@ class Backend:
             return {
                 "text": text,
                 "status": "complete",
-                "input_type": "audio",
+                "input_type": "session",
                 "session_id": value["session_id"],
                 "transcript": heard["transcript"],
                 "missing_chunks": [],
                 "duration_ms": heard["duration_ms"],
             }
 
-        return self._poll_or_start(f"draft:{value['session_id']}", "draft", work, request_id)
+        return self._poll_or_start(f"ask:{value['session_id']}", "ask", work, request_id)
 
     # -------------------------------------------------------------- imagine
 
@@ -821,9 +912,7 @@ class Backend:
                 "this backend does not implement imagine",
             )
         client_request_id = _client_request_id(payload)
-        input_type, value = self.parse_input(
-            payload, alias="prompt", alias_code="prompt_invalid"
-        )
+        input_type, value = self.parse_input(payload)
         aspect_ratio = _enum(payload, "aspect_ratio", ASPECT_RATIOS, "unsupported_aspect_ratio")
         quality = _enum(payload, "quality", QUALITIES, "unsupported_quality")
 
@@ -835,14 +924,14 @@ class Backend:
                 f"imagine:{client_request_id}", "imagine", work, request_id
             )
 
-        precheck = self._audio_precheck(value, "imagine", request_id)
+        precheck = self._session_precheck(value, "imagine", request_id)
         if precheck:
-            return {"input_type": "audio", **precheck}
+            return {"input_type": "session", **precheck}
 
         def work() -> dict:
             heard = self._transcribe_session(value, "imagine")
             body = self._generate(
-                heard["transcript"], aspect_ratio, quality, input_type="audio"
+                heard["transcript"], aspect_ratio, quality, input_type="session"
             )
             body["session_id"] = value["session_id"]
             body["transcript"] = heard["transcript"]
@@ -874,37 +963,6 @@ class Backend:
             "quality": quality,
         }
 
-    # ------------------------------------------------------------ transcript
-
-    def transcript(self, session_id: str, payload: dict, request_id: str) -> dict:
-        polish = payload.get("polish", True)
-        if not isinstance(polish, bool):
-            raise bad_request("polish must be a boolean")
-        audio = {
-            "session_id": session_id,
-            "client_chunk_count": _positive_int(payload, "client_chunk_count"),
-            "client_total_duration_ms": _positive_int(payload, "client_total_duration_ms"),
-            "polish": polish,
-        }
-        precheck = self._audio_precheck(audio, "dictation", request_id)
-        if precheck:
-            return {"text": None, **precheck}
-
-        def work() -> dict:
-            heard = self._transcribe_session(audio, "dictation")
-            self._seal_session(session_id)
-            return {
-                "session_id": session_id,
-                "status": "complete",
-                "text": heard["transcript"],
-                "missing_chunks": [],
-                "duration_ms": heard["duration_ms"],
-            }
-
-        return self._poll_or_start(
-            f"dictation:{session_id}", "dictation", work, request_id
-        )
-
 
 # ------------------------------------------------------------ small helpers
 
@@ -925,12 +983,12 @@ def _optional_string(payload: dict, field: str, max_len: int) -> str | None:
     return value[:max_len]
 
 
-def _positive_int(payload: dict, field: str) -> int:
+def _positive_int(payload: dict, field: str, *, prefix: str = "") -> int:
     value = payload.get(field)
     if not isinstance(value, int) or isinstance(value, bool):
-        raise bad_request(f"{field} must be an integer")
+        raise input_invalid(f"{prefix}{field} must be an integer")
     if value < 1:
-        raise bad_request(f"{field} must be >= 1")
+        raise input_invalid(f"{prefix}{field} must be >= 1")
     return value
 
 
@@ -948,7 +1006,7 @@ def _enum(payload: dict, field: str, allowed: tuple[str, ...], code: str) -> str
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "caret-reference/1.1"
+    server_version = "caret-reference/2.0"
     sys_version = ""
 
     backend: Backend  # injected by make_server
@@ -1028,43 +1086,45 @@ class Handler(BaseHTTPRequestHandler):
         backend = self.backend
         auth_header = self.headers.get("Authorization")
 
-        if method == "GET" and path == "/v1/health":
+        if method == "GET" and path == "/v2/health":
             return 200, backend.health(auth_header, request_id), {}
 
         # The one anonymous write on the contract: a client claiming a
         # pairing token has no API key yet — obtaining one is the point. It
         # is rate-limited on its own budget rather than left unbounded.
-        if method == "POST" and path == "/v1/pairing/claim":
+        if method == "POST" and path == "/v2/pairing/claim":
             backend.claim_limiter.check("pairing-claim")
             return 200, backend.claim_pairing_token(self._json_body(), request_id), {}
 
         key = backend.require_auth(auth_header)
         backend.limiter.check(key)
 
-        if path == "/v1/pairing/tokens":
+        if path == "/v2/pairing/tokens":
             if method == "POST":
                 return 200, backend.mint_pairing_token(
                     self._json_body(), key, request_id
                 ), {}
             if method == "GET":
                 return 200, backend.list_pairing_tokens(request_id), {}
-        if method == "POST" and path == "/v1/pairing/revoke":
+        if method == "POST" and path == "/v2/pairing/revoke":
             return 200, backend.revoke_pairing_token(self._json_body(), request_id), {}
 
-        if method == "POST" and path == "/v1/draft":
-            return self._async_aware(backend.draft(self._json_body(), request_id))
-        if method == "POST" and path == "/v1/imagine":
+        if method == "POST" and path == "/v2/dictate":
+            return self._async_aware(backend.dictate(self._json_body(), request_id))
+        if method == "POST" and path == "/v2/ask":
+            return self._async_aware(backend.ask(self._json_body(), request_id))
+        if method == "POST" and path == "/v2/imagine":
             return self._async_aware(backend.imagine(self._json_body(), request_id))
-        if method == "POST" and path == "/v1/dictation/sessions":
+        if method == "POST" and path == "/v2/sessions":
             return 200, backend.create_session(self._json_body(), request_id), {}
 
         parts = path.strip("/").split("/")
-        # v1 / dictation / sessions / {id} / …
-        if len(parts) >= 4 and parts[:3] == ["v1", "dictation", "sessions"]:
-            session_id = parts[3]
-            if method == "PUT" and len(parts) == 6 and parts[4] == "chunks":
+        # v2 / sessions / {id} / …
+        if len(parts) >= 3 and parts[:2] == ["v2", "sessions"]:
+            session_id = parts[2]
+            if method == "PUT" and len(parts) == 5 and parts[3] == "chunks":
                 try:
-                    seq = int(parts[5])
+                    seq = int(parts[4])
                 except ValueError:
                     raise bad_request("seq must be an integer") from None
                 body = self._body(CHUNK_MAX_BYTES, code="chunk_too_large")
@@ -1077,10 +1137,8 @@ class Handler(BaseHTTPRequestHandler):
                     duration_ms=int(duration) if (duration or "").isdigit() else None,
                     request_id=request_id,
                 ), {}
-            if method == "POST" and len(parts) == 5 and parts[4] == "transcript":
-                return self._async_aware(
-                    backend.transcript(session_id, self._json_body(), request_id)
-                )
+            if method == "POST" and len(parts) == 4 and parts[3] == "ack":
+                return 200, backend.ack_session(session_id, request_id), {}
 
         raise CaretError(404, "not_found", f"no route for {method} {path}")
 
@@ -1118,12 +1176,12 @@ def backend_from_env(env: dict[str, str] | None = None) -> Backend:
     if not keys:
         log.warning(
             "CARET_API_KEYS is empty: every authenticated request will return 401 "
-            "and /v1/health will report degraded"
+            "and /v2/health will report degraded"
         )
     store = Store(data_dir)
     start_janitor(store)
     # Capability routing: the agent is resolved first, and the STT and
-    # image resolvers prefer it for their surface when — and only when —
+    # image resolvers prefer it for their operation when — and only when —
     # its adapter verifiably provides that capability (see adapters.py).
     agent = adapters.agent_from_env(env)
     return Backend(
