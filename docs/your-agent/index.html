@@ -40,20 +40,30 @@
   <h1>Implement the Caret API.</h1>
   <p class="lead">
     Everything the keyboard sends and everything it expects back, in the order
-    you would build it. Six endpoints; two of them are required. The
+    you would build it. Six endpoints. <strong>Health and the dictation
+    session endpoints are required; Ask and Imagine are optional.</strong> The
     machine-readable version of this page is
     <a href="/openapi.yaml"><code>openapi.yaml</code></a> — where the two
     disagree, the OpenAPI document wins.
   </p>
 
   <div class="note">
-    <strong>Shortest path</strong>
+    <strong>Dictate is mandatory. Ask and Imagine are not.</strong>
     <p style="margin:0.4rem 0 0">
-      Implement <code>GET /v1/health</code> and <code>POST /v1/draft</code>
-      with typed input, declare
-      <code>{"draft": true, "dictation": false, "imagine": false}</code>, and
-      you have a working keyboard. Everything below that is optional and
-      additive.
+      A <code>caret/v1</code> backend takes speech. It must advertise
+      <code>"dictation": true</code> and serve the dictation session
+      endpoints; anything that cannot is not a Caret backend and must report
+      <code>"status": "not_ready"</code> rather than dress itself up as one.
+      Ask (<code>/v1/draft</code>) and Imagine (<code>/v1/imagine</code>) are
+      each optional: report <code>false</code> and answer
+      <code>404 not_found</code> if you do not serve them.
+    </p>
+    <p style="margin:0.4rem 0 0">
+      So the shortest valid backend is <code>GET /v1/health</code> plus the
+      three dictation endpoints, declaring
+      <code>{"draft": false, "dictation": true, "imagine": false}</code>. The
+      shape this contract does <em>not</em> accept is the mirror image of
+      that — Ask on with dictation off.
     </p>
   </div>
 
@@ -96,7 +106,7 @@
   "status": "ok",
   "service": "my-backend",
   "contract": "caret/v1",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "time": "2026-08-06T11:40:20Z",
   "auth": {"presented": true, "valid": true},
   "capabilities": {
@@ -107,12 +117,24 @@
       "draft": ["text", "audio"],
       "dictation": ["audio"]
     }
-  }
+  },
+  "readiness": {"ready": true, "blockers": []}
 }</code></pre>
   <ul>
-    <li><code>status</code> is <code>ok</code> or <code>degraded</code>.
-        <code>degraded</code> means reachable but impaired — the keyboard shows
-        a warning, not a failure.</li>
+    <li><code>status</code> is <code>ok</code>, <code>degraded</code> or
+        <code>not_ready</code>. <code>degraded</code> means reachable but
+        impaired — the keyboard shows a warning, not a failure.
+        <code>not_ready</code> means this is not a usable Caret backend:
+        <strong>report it whenever <code>capabilities.dictation</code> is
+        <code>false</code></strong>, because dictation is mandatory.</li>
+    <li><code>readiness</code> (contract 1.2) says why, in codes rather than
+        prose, so a setup tool can act on it:
+        <code>{"ready": false, "blockers": [{"code": "no_stt_adapter",
+        "message": "…"}]}</code>. Defined codes are
+        <code>no_stt_adapter</code> and <code>no_api_keys</code>; clients
+        ignore ones they do not know. A backend with no readiness block is
+        treated as a 1.1 backend and judged on <code>status</code>
+        alone.</li>
     <li><code>auth.presented</code> / <code>auth.valid</code> let the settings
         screen tell "wrong key" apart from "wrong URL". With no
         <code>Authorization</code> header, report
@@ -126,7 +148,7 @@
   </ul>
 
   <h2>2 · Ask</h2>
-  <p class="endpoint"><span class="method">POST</span> /v1/draft</p>
+  <p class="endpoint"><span class="method">POST</span> /v1/draft — optional</p>
   <p>
     The core surface: an instruction becomes one message, ready to insert. The
     user sees the result before it lands in the text field, so your job is to
@@ -175,7 +197,12 @@
     <code>text</code> may be <code>null</code>.
   </p>
 
-  <h2>3 · Spoken input</h2>
+  <h2>3 · Spoken input — required</h2>
+  <p>
+    This is the part no backend may skip. The three session endpoints below
+    are what makes something a Caret backend; if you implement nothing else,
+    implement these and report <code>"draft": false</code>.
+  </p>
   <p>
     Spoken Ask and spoken Imagine are not a second protocol. The client records
     into an ordinary dictation session, uploads ordinary chunks, and then hands
@@ -477,7 +504,56 @@ Retry-After: 3
     <li><strong>Ask is read-only.</strong> The user has not inserted anything
         yet. A draft that books the meeting it is describing is a side effect
         nobody approved — say so in your prompt, every time.</li>
+    <li><strong>A connection QR is a credential.</strong> If you offer one
+        (see below), it carries the key itself — so generate it only on
+        explicit request, never log or print the payload, write saved files
+        owner-only, and tell the user that rotating the key is what revokes
+        it.</li>
   </ul>
+
+  <h2 id="qr">9a · Connecting a device: <code>caret-connect:v1</code></h2>
+  <p>
+    Caret can configure itself from a scanned code instead of a typed URL and
+    key. If your backend offers one, this is the format it must produce — the
+    client pins these bytes, so a one-byte disagreement scans and then fails,
+    which is the worst kind of setup bug to debug from a phone.
+  </p>
+  <pre><code>minified JSON, keys sorted → UTF-8 → base64url, no padding → prefix</code></pre>
+  <table>
+    <tr><th>Field</th><th>Meaning</th></tr>
+    <tr><td><code>t</code></td>
+        <td>Type, case-sensitive. <code>"agent"</code> for a backend the user
+            runs. (<code>"hosted"</code> is reserved for Caret's own service
+            and must <em>omit</em> <code>u</code>: the client pins its own
+            canonical URL, so a hosted code that names one is an attempt to
+            redirect a phone, and is refused.)</td></tr>
+    <tr><td><code>u</code></td>
+        <td>Base URL, no trailing slash. Required for <code>agent</code>.
+            <code>https://</code>, except loopback, RFC-1918 addresses and
+            <code>*.ts.net</code>, where the transport is already
+            private.</td></tr>
+    <tr><td><code>k</code></td>
+        <td>The API key, 10–300 characters.</td></tr>
+  </table>
+  <p>Worked example — the key is fake, and the bytes are pinned on both sides:</p>
+  <pre><code>{"k":"caret_demo_key_1234567890","t":"agent","u":"https://agent.example.com"}
+
+caret-connect:v1:eyJrIjoiY2FyZXRfZGVtb19rZXlfMTIzNDU2Nzg5MCIsInQiOiJhZ2Vu
+dCIsInUiOiJodHRwczovL2FnZW50LmV4YW1wbGUuY29tIn0</code></pre>
+  <p>
+    Unknown fields are tolerated and passed through, so the format can grow.
+    Reject an unknown <code>t</code> rather than guessing, and reject an
+    <code>agent</code> payload with no <code>u</code>.
+  </p>
+  <p>
+    Gate generation on readiness: a code for a backend with no STT hands the
+    user a keyboard missing its main surface and no explanation. The
+    reference backend implements all of this in
+    <code>caret_backend/connect.py</code> and exposes it as
+    <code>python3 -m caret_backend --qr --url &lt;base-url&gt;</code>; see
+    <a href="/connect/#qr">the Connect overview</a> for the operator-facing
+    version.
+  </p>
 
   <h2>10 · Check yourself</h2>
   <p>
@@ -512,11 +588,11 @@ curl -s -X POST https://your-host/v1/draft \
     page is implemented once, in an obvious place.
   </p>
   <pre><code>cd reference-backend
-export CARET_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
-echo "$CARET_API_KEYS"          # paste this into Caret
+python3 -c 'import secrets;print(secrets.token_urlsafe(32))'  # generate a key — copy the output
+export CARET_API_KEYS=paste-the-key-here                      # paste this into Caret
 python3 -m caret_backend --port 8787
 
-python3 -m unittest discover -s tests     # 53 hermetic tests, no network
+python3 -m unittest discover -s tests     # hermetic tests, no network, no model calls
 python3 conformance.py --base-url http://localhost:8787 --api-key "$CARET_API_KEYS"</code></pre>
   <p>
     Your agent plugs in as a command line — anything that takes a prompt and
@@ -526,9 +602,12 @@ python3 conformance.py --base-url http://localhost:8787 --api-key "$CARET_API_KE
 export CARET_STT_COMMAND='whisper-cli -m model.bin -f {audio} --no-timestamps'
 export CARET_IMAGE_COMMAND='my-image-tool --prompt {prompt} --out {out}'</code></pre>
   <p>
-    Dictation and Imagine stay off — and say so in <code>capabilities</code> —
-    until you configure those two. Full configuration, TLS notes and the
-    per-agent details are in the reference backend's own README.
+    Ask and Imagine stay off — and say so in <code>capabilities</code> —
+    until you configure them. Dictation is the exception: with no STT adapter
+    resolved the backend reports <code>not_ready</code> and
+    <code>--check</code> fails, because a backend that cannot take speech is
+    not a Caret backend. Full configuration, TLS notes and the per-agent
+    details are in the reference backend's own README.
   </p>
 </main>
 

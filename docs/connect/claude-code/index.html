@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Connect Claude Code to Caret</title>
-<meta name="description" content="Runbook: the Caret reference backend with Claude Code as its Ask adapter — read-only plan mode, no session persistence — on a local Mac or a VPS, with optional local OpenWhisper dictation.">
+<meta name="description" content="Runbook: the Caret reference backend with Claude Code as its Ask adapter — read-only plan mode, no session persistence — on a local Mac or a VPS, with mandatory dictation on local OpenWhisper.">
 <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
 </head>
@@ -29,8 +29,8 @@
   <p class="lead">
     The reference backend runs one <code>claude -p</code> call per draft —
     print mode, read-only plan mode, nothing persisted — and hands the answer
-    to Caret. With OpenWhisper installed, the same backend also takes
-    dictation.
+    to Caret. Local OpenWhisper takes dictation on the same backend — the one
+    capability every Caret backend must serve.
   </p>
 
   <div class="note">
@@ -60,10 +60,14 @@ claude plugin install caret-connect@caret-docs</code></pre>
     <li>The <code>claude</code> CLI installed and signed in on the machine
         that will run the backend (<code>claude --version</code> works).</li>
     <li>Python 3.10+ (preinstalled on macOS and every mainstream Linux).</li>
-    <li>Optionally, <a href="https://github.com/openai/whisper">OpenWhisper</a>
-        (<code>brew install openai-whisper</code>) for local dictation —
-        without it, dictation reports honestly off and everything else
-        works.</li>
+    <li><strong>An STT adapter — required.</strong>
+        <a href="https://github.com/openai/whisper">OpenWhisper</a>
+        (<code>brew install openai-whisper</code>) is the default and keeps
+        audio on the machine; <code>CARET_STT_HTTP_URL</code> or
+        <code>CARET_STT_COMMAND</code> are the alternatives. With none of
+        them, the backend is <code>not_ready</code> and
+        <code>--check</code> fails: dictation is
+        <a href="/connect/#stt">mandatory</a>.</li>
     <li>Tailscale on that machine and your iPhone, <em>or</em> a domain
         pointed at your VPS for public HTTPS.</li>
   </ul>
@@ -73,11 +77,12 @@ claude plugin install caret-connect@caret-docs</code></pre>
 cd caret-docs/reference-backend
 
 export CARET_AGENT=claude-code
-export CARET_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
-echo "$CARET_API_KEYS"                        # paste this into Caret later
+python3 -c 'import secrets;print(secrets.token_urlsafe(32))'  # generate a key — copy the output
+export CARET_API_KEYS=paste-the-key-here                      # paste this into Caret later
 
 python3 -m caret_backend --check
-# config ok: agent=claude-code stt=openwhisper … (stt=none without OpenWhisper)</code></pre>
+# config ok: ready   (agent=claude-code stt=openwhisper …)
+# without an STT adapter this fails instead: NOT READY — no_stt_adapter</code></pre>
   <p>
     Want a specific model, or plan mode is not restrictive enough for your
     taste? Override the command rather than the code — substitution is
@@ -109,16 +114,21 @@ curl -s -X POST localhost:8787/v1/draft \
     whole story.
   </p>
 
-  <h2>Dictation</h2>
+  <h2>Dictation — mandatory</h2>
   <p>
     STT is the backend's own adapter lane — Claude Code plays no part in
     transcription. With OpenWhisper on PATH, dictation and spoken Ask are on:
     speech is transcribed locally first, and only the resulting text reaches
     <code>claude -p</code>. <code>CARET_STT_MODEL</code> picks the model
-    (<code>turbo</code> default). No OpenWhisper, no problem —
-    <code>capabilities</code> reports dictation off and the keyboard hides
-    the microphone. See <a href="/connect/#stt">the STT section of the
-    Connect overview</a> for hosted and custom STT options.
+    (<code>turbo</code> default). See <a href="/connect/#stt">the STT section
+    of the Connect overview</a> for hosted and custom STT options.
+  </p>
+  <p>
+    This is not optional. With no STT adapter resolved, health reports
+    <code>"status": "not_ready"</code> with the <code>no_stt_adapter</code>
+    blocker, <code>--check</code> exits non-zero, and the connection QR
+    refuses to generate — a backend that cannot take speech is not a Caret
+    backend, however well <code>claude -p</code> drafts.
   </p>
 
   <h2>3a · Local Mac</h2>
@@ -157,13 +167,24 @@ caret.yourdomain.com {
   </p>
 
   <h2>4 · Pair with Caret</h2>
+  <p>Scan a code, or type two strings. The scan is one command:</p>
+  <pre><code>python3 -m caret_backend --qr --url https://your-mac.your-tailnet.ts.net</code></pre>
+  <p>
+    That prints a <code>caret-connect:v1</code> symbol carrying the base URL
+    and the key; <code>--save ~/caret-connect.png</code> writes an owner-only
+    PNG instead. It refuses while any readiness blocker stands.
+    <strong>The code <em>is</em> the credential</strong> — anyone who scans it
+    can use this backend until you rotate <code>CARET_API_KEYS</code>. Format
+    and warnings: <a href="/connect/#qr">the connection QR</a>.
+  </p>
+  <p>Or by hand:</p>
   <ol>
     <li>Caret settings → your backend URL
         (<code>https://your-mac.your-tailnet.ts.net</code> or
         <code>https://caret.yourdomain.com</code>).</li>
     <li>Paste the API key you generated.</li>
-    <li>The app runs the health check and shows what it found — Ask always,
-        dictation when OpenWhisper resolved, Imagine only if you configured
+    <li>The app runs the health check and shows what it found — dictation
+        always, Ask when an agent resolved, Imagine only if you configured
         an image command.</li>
   </ol>
 
@@ -184,9 +205,12 @@ caret.yourdomain.com {
     <tr><td>Health reachable, drafts 401</td>
         <td>Key in the app ≠ <code>CARET_API_KEYS</code>. Health's
             <code>auth.valid</code> tells you before a draft ever runs.</td></tr>
-    <tr><td>No microphone in the keyboard</td>
-        <td>Dictation is off because no STT resolved. Install OpenWhisper and
-            restart, then check <code>adapters.stt</code> in health.</td></tr>
+    <tr><td>Health says <code>"status": "not_ready"</code>, or no microphone
+            in the keyboard</td>
+        <td>No STT resolved, so this is not yet a valid Caret backend.
+            Install OpenWhisper and restart, then check
+            <code>adapters.stt</code> and <code>readiness</code> in
+            health.</td></tr>
   </table>
   <p>
     General transport and pairing problems are covered on

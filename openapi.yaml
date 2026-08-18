@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Caret BYOB API
-  version: 1.1.0
+  version: 1.2.0
   summary: The bring-your-own-backend contract for the Caret iOS keyboard.
   description: |
     Caret v1 operates with no first-party backend. The user configures a backend
@@ -26,6 +26,34 @@ info:
     - Unknown JSON fields are always ignored by clients and servers. Additive
       fields are non-breaking. Breaking changes require a new path version
       (`/v2`). Error `code` values are append-only.
+
+    ## Dictate is mandatory; Ask and Imagine are not (1.2)
+
+    A conforming backend **takes speech**. `capabilities.dictation` must be
+    `true`, `POST /v1/dictation/sessions` and its chunk and transcript
+    endpoints must work, and a backend that cannot transcribe is not a
+    partially-featured Caret backend — it is a non-conforming one, and it says
+    so rather than reporting `ok`.
+
+    Ask (`/v1/draft`) and Imagine (`/v1/imagine`) are optional extensions on
+    top of that. A backend with no agent configured reports
+    `capabilities.draft: false` and answers `404 not_found` on `/v1/draft`; a
+    backend with no image provider reports `capabilities.imagine: false` and
+    answers `404 not_found` on `/v1/imagine`. Both are valid, conforming
+    deployments. "Ask on, Dictate off" is not.
+
+    `GET /v1/health` carries this in two places:
+
+    - `status` — `ok` (ready), `degraded` (serving, but an upstream dependency
+      is impaired), or `not_ready` (**does not meet the contract**: the client
+      shows a setup-incomplete state rather than a transient warning).
+    - `readiness` — `{ready: bool, blockers: [{code, message}]}`. Blocker codes
+      are stable and append-only: `no_stt_adapter` (mandatory dictation has no
+      transcriber) and `no_api_keys` (nothing configured to authenticate
+      against, so every authenticated call would fail closed).
+
+    A `not_ready` backend still answers health, so setup tooling can poll it and
+    show exactly what is missing.
 
     ## One input model for every mode (1.1)
 
@@ -72,6 +100,55 @@ info:
     from a *different* surface returns `409 session_conflict`, and retrying
     after a terminal failure requires a new session.
 
+    ## Connecting a device: the `caret-connect:v1` QR (1.2)
+
+    Configuring Caret means moving a base URL and an API key onto a phone.
+    Typing a 43-character key on a phone keyboard is the worst step in the whole
+    setup, so the client is scan-first with manual entry as the fallback: it
+    reads a QR encoding a single string.
+
+    ```
+    caret-connect:v1:<base64url(minified JSON)>
+    ```
+
+    - base64url per RFC 4648 §5 (`+`→`-`, `/`→`_`), **unpadded**.
+    - The JSON is minified UTF-8 with sorted keys:
+      `{"k":"<api key>","t":"agent"|"hosted","u":"<base url>"}`.
+    - `t` is case-sensitive. `agent` means a self-hosted backend implementing
+      this contract and **requires** `u`. `hosted` means a Caret-operated
+      backend and **must omit** `u` — the client pins its own canonical URL and
+      rejects a `hosted` payload that names a different one, so such a code can
+      never be rewritten to redirect a device at another server.
+    - `k` is 10–300 characters.
+    - Unknown fields are ignored, so the payload can gain fields without a `v2`.
+
+    Worked example, byte-pinned (the key is a test vector, not a real key):
+
+    ```
+    {"k":"caret_demo_key_1234567890","t":"agent","u":"https://agent.example.com"}
+    → caret-connect:v1:eyJrIjoiY2FyZXRfZGVtb19rZXlfMTIzNDU2Nzg5MCIsInQiOiJhZ2VudCIsInUiOiJodHRwczovL2FnZW50LmV4YW1wbGUuY29tIn0
+    ```
+
+    **The QR is a credential, not a pointer to one.** It carries the API key
+    verbatim. Anyone who scans it, photographs the screen, or finds the saved
+    image can connect as its owner, and keeps that access until the key is
+    rotated — rotating the key is the only revocation. Backends and dashboards
+    that render one must: generate it only when explicitly asked, serve it only
+    to an authenticated owner, never log the payload, and mask it in ordinary
+    console or UI output.
+
+    This QR is produced by whatever configures the backend; it is not an
+    endpoint in this contract. The reference backend emits it with
+    `python3 -m caret_backend --qr --url <base-url>`.
+
+    ### Pairing tokens (optional server extension)
+
+    A backend that would rather not put a durable key on screen may implement
+    `/v1/pairing/*` below: a short-lived, single-use, URL-bound token that a
+    client exchanges once for the key. It is **not** part of the client
+    contract — the Caret iOS app does not implement it — and exists for
+    operators and for third-party clients. Backends may omit it entirely.
+
     ## Backwards compatibility
 
     `1.0` clients sent `instruction` (Ask) and `prompt` (Imagine) as top-level
@@ -95,6 +172,11 @@ tags:
     description: Imagine — typed or spoken prompt to a generated image.
   - name: dictation
     description: Chunked audio sessions (the one audio protocol; shared by all modes).
+  - name: pairing
+    description: |
+      Optional server extension for handing a device access without handing it
+      a durable key. Not implemented by the Caret iOS client, which connects by
+      scanning a `caret-connect:v1` code.
 
 security:
   - bearerAuth: []
@@ -151,6 +233,7 @@ paths:
                     version: 1.4.2
                     time: "2026-08-03T09:12:44Z"
                     auth: { presented: false, valid: null }
+                    readiness: { ready: true, blockers: [] }
                     capabilities:
                       draft: true
                       imagine: true
@@ -160,6 +243,51 @@ paths:
                         imagine: [text, audio]
                         dictation: [audio]
                     request_id: req_2b8d10
+                dictationOnly:
+                  summary: A valid backend with no agent configured
+                  description: |
+                    Dictation works, so this backend conforms. Ask and Imagine
+                    are honestly off and answer `404 not_found`.
+                  value:
+                    status: ok
+                    service: acme-caret-backend
+                    contract: caret/v1
+                    version: 1.4.2
+                    time: "2026-08-03T09:12:44Z"
+                    auth: { presented: true, valid: true }
+                    readiness: { ready: true, blockers: [] }
+                    capabilities:
+                      draft: false
+                      imagine: false
+                      dictation: true
+                      input_modes:
+                        dictation: [audio]
+                    request_id: req_5c19ab
+                notReady:
+                  summary: Not a conforming backend — dictation is unavailable
+                  description: |
+                    Mandatory dictation has no transcriber. The client shows a
+                    setup-incomplete state; it does not treat this as a
+                    transient upstream problem.
+                  value:
+                    status: not_ready
+                    service: acme-caret-backend
+                    contract: caret/v1
+                    version: 1.4.2
+                    time: "2026-08-03T09:12:44Z"
+                    auth: { presented: true, valid: true }
+                    readiness:
+                      ready: false
+                      blockers:
+                        - code: no_stt_adapter
+                          message: "dictation is mandatory and no STT adapter is configured"
+                    capabilities:
+                      draft: true
+                      imagine: false
+                      dictation: false
+                      input_modes:
+                        draft: [text]
+                    request_id: req_71ca3f
         default:
           $ref: "#/components/responses/ErrorResponse"
 
@@ -754,6 +882,214 @@ paths:
         "500":
           $ref: "#/components/responses/ServerError"
 
+  /v1/pairing/tokens:
+    post:
+      operationId: mintPairingToken
+      tags: [pairing]
+      summary: Mint a single-use pairing token (optional extension)
+      description: |
+        Optional server extension; see "Pairing tokens" above. Not implemented
+        by the Caret iOS client — a backend may omit these endpoints entirely,
+        and one that does answers `404`.
+
+        Creates a short-lived, single-use token bound to `server_url`, which a
+        client exchanges once at `POST /v1/pairing/claim` for the API key. The
+        key handed over is the one the caller authenticated with, so a caller
+        can never issue a credential it does not already hold.
+
+        Refuses with `409 backend_not_ready` while `readiness.ready` is false:
+        pairing a device to a backend that cannot take dictation produces a
+        keyboard with no microphone and nothing to explain it.
+      parameters:
+        - $ref: "#/components/parameters/CaretClient"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairingMintRequest"
+      responses:
+        "200":
+          description: Token minted. The plaintext token appears here and nowhere else.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingMintResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Pairing is not implemented or is disabled on this backend.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: { code: pairing_disabled, message: "pairing is turned off on this backend", retryable: false }
+                request_id: req_31ad7c
+        "409":
+          description: The backend does not meet the contract yet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: { code: backend_not_ready, message: "refusing to pair: this is not a ready Caret backend yet (no_stt_adapter)", retryable: false }
+                request_id: req_88b0e1
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+    get:
+      operationId: listPairingTokens
+      tags: [pairing]
+      summary: List live pairing tokens (optional extension)
+      description: |
+        Metadata only. Never returns a token or an API key — the plaintext
+        token is returned once, at mint, and only its digest is retained.
+      parameters:
+        - $ref: "#/components/parameters/CaretClient"
+      responses:
+        "200":
+          description: Live and recently-terminal tokens.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tokens, request_id]
+                properties:
+                  tokens:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PairingTokenSummary"
+                  request_id: { type: string }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /v1/pairing/claim:
+    post:
+      operationId: claimPairingToken
+      tags: [pairing]
+      summary: Exchange a pairing token for the API key (optional extension)
+      description: |
+        Anonymous by necessity: the client has no key yet, which is what this
+        call is for. The token is the credential, it is consumed on the way
+        through, and this response body is the only place the API key appears.
+
+        `server_url` must be the URL the client was given. A token minted for
+        one backend cannot be claimed against another — without that check, an
+        attacker who relays a pairing code has the key delivered to a server of
+        their choosing.
+
+        Every failure has its own code, so a client can say what went wrong
+        instead of "pairing failed".
+      security:
+        - {}
+      parameters:
+        - $ref: "#/components/parameters/CaretClient"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairingClaimRequest"
+      responses:
+        "200":
+          description: Token consumed; the configuration follows.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingClaimResponse"
+        "400":
+          description: Malformed, or claimed against the wrong server URL.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: { code: pairing_url_mismatch, message: "this pairing token was issued for a different server URL", retryable: false }
+                request_id: req_4c0e91
+        "401":
+          description: No such token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: { code: pairing_token_invalid, message: "no such pairing token: generate a new one on the server", retryable: false }
+                request_id: req_9ab210
+        "409":
+          description: Already claimed — pairing tokens are single-use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: { code: pairing_token_consumed, message: "this pairing token was already used", retryable: false }
+                request_id: req_70cc4d
+        "410":
+          description: Expired or revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: { code: pairing_token_expired, message: "this pairing token expired: generate a new one on the server", retryable: false }
+                request_id: req_1de83b
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /v1/pairing/revoke:
+    post:
+      operationId: revokePairingToken
+      tags: [pairing]
+      summary: Revoke a pairing token (optional extension)
+      description: |
+        Revokes one token by id, or every pending one with `{"all": true}`.
+        Neither touches the API key — that is the whole advantage of a pairing
+        token over a code that carries the key itself, which can only be
+        revoked by rotating the key.
+      parameters:
+        - $ref: "#/components/parameters/CaretClient"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairingRevokeRequest"
+      responses:
+        "200":
+          description: Revoked.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revoked, scope, request_id]
+                properties:
+                  revoked: { type: integer, description: How many tokens were revoked. }
+                  scope: { type: string, enum: [one, all] }
+                  token:
+                    $ref: "#/components/schemas/PairingTokenSummary"
+                  request_id: { type: string }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No such token id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: { code: pairing_token_invalid, message: "no such pairing token: pt_1a2b3c4d", retryable: false }
+                request_id: req_6f2d18
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -876,7 +1212,11 @@ components:
                 `transcription_failed`, `internal_error`, and — added in 1.1 —
                 `input_invalid`, `unsupported_input_type`, `session_conflict`,
                 `prompt_invalid`, `unsupported_aspect_ratio`,
-                `unsupported_quality`, `image_generation_failed`, `not_found`.
+                `unsupported_quality`, `image_generation_failed`, `not_found`;
+                and — added in 1.2 — `backend_not_ready`, and for the optional
+                pairing extension `pairing_disabled`, `pairing_token_invalid`,
+                `pairing_token_expired`, `pairing_token_consumed`,
+                `pairing_token_revoked`, `pairing_url_mismatch`.
                 The list is append-only; clients treat unknown codes by
                 `retryable`.
             message:
@@ -895,8 +1235,15 @@ components:
       properties:
         status:
           type: string
-          enum: [ok, degraded]
-          description: "`degraded` means reachable but an upstream dependency is impaired; the client shows a warning state, not a failure."
+          enum: [ok, degraded, not_ready]
+          description: |
+            `ok` — conforming and serving.
+            `degraded` — serving, but an upstream dependency is impaired; the
+            client shows a warning state, not a failure.
+            `not_ready` (1.2) — does not meet the contract, because dictation is
+            mandatory and unavailable, or no API key is configured. The client
+            shows a setup-incomplete state and points at `readiness.blockers`.
+            A backend never reports `ok` while `readiness.ready` is false.
         service:
           type: string
           description: Implementation name, free-form.
@@ -919,9 +1266,45 @@ components:
             valid:
               type: [boolean, "null"]
               description: "`null` when no key was presented."
+        readiness:
+          type: object
+          description: |
+            Added in 1.2. Whether this backend meets the contract, and what is
+            missing if not. Absent on pre-1.2 backends; a client that does not
+            find it falls back to `status`.
+          required: [ready, blockers]
+          properties:
+            ready: { type: boolean }
+            blockers:
+              type: array
+              description: Empty when `ready` is true.
+              items:
+                type: object
+                required: [code, message]
+                properties:
+                  code:
+                    type: string
+                    description: |
+                      Stable, append-only. `no_stt_adapter` — dictation is
+                      mandatory and no transcriber is configured.
+                      `no_api_keys` — no key configured, so every authenticated
+                      call fails closed.
+                    examples: [no_stt_adapter, no_api_keys]
+                  message:
+                    type: string
+                    description: Human-readable, safe to show during setup.
+          example:
+            ready: false
+            blockers:
+              - code: no_stt_adapter
+                message: "dictation is mandatory and no STT adapter is configured"
         capabilities:
           type: object
-          description: Which contract surfaces this backend implements.
+          description: |
+            Which contract surfaces this backend implements. `dictation` must be
+            `true` on a conforming backend (see "Dictate is mandatory" above);
+            `draft` and `imagine` are honestly `false` when nothing is
+            configured to serve them.
           properties:
             draft: { type: boolean }
             dictation: { type: boolean }
@@ -945,6 +1328,114 @@ components:
                 dictation: [audio]
         request_id:
           type: string
+
+    PairingMintRequest:
+      type: object
+      required: [server_url]
+      properties:
+        server_url:
+          type: string
+          format: uri
+          description: |
+            The base URL the device will use. The token is bound to it and can
+            only be claimed against it. `https://` is required outside the
+            operator's own network.
+          examples: ["https://agent.example.com"]
+        ttl_seconds:
+          type: integer
+          minimum: 30
+          maximum: 900
+          default: 300
+          description: |
+            Lifetime. Bounded deliberately — a pairing window longer than a few
+            minutes is a standing invitation, not a setup step.
+
+    PairingMintResponse:
+      type: object
+      required: [token_id, pairing_token, server_url, expires_at, single_use, request_id]
+      properties:
+        token_id:
+          type: string
+          description: Handle for listing and revoking. Not a credential.
+          examples: [pt_1a2b3c4d]
+        pairing_token:
+          type: string
+          description: |
+            The secret, returned once and never recoverable — the server keeps
+            only its digest. Treat as a credential in transit.
+        server_url: { type: string, format: uri, description: Canonicalised. }
+        payload:
+          type: string
+          description: |
+            A transport-ready encoding of the token and URL, if the backend
+            offers one. Never contains the API key.
+        expires_at: { type: string, format: date-time }
+        expires_in_seconds: { type: integer }
+        single_use:
+          type: boolean
+          const: true
+          description: Always true; claiming consumes the token.
+        request_id: { type: string }
+
+    PairingTokenSummary:
+      type: object
+      description: Listing metadata. Never carries the token or the API key.
+      required: [token_id, server_url, state]
+      properties:
+        token_id: { type: string }
+        server_url: { type: string, format: uri }
+        state:
+          type: string
+          enum: [pending, claimed, expired, revoked]
+        created_at: { type: integer, description: Unix seconds. }
+        expires_at: { type: integer, description: Unix seconds. }
+
+    PairingClaimRequest:
+      type: object
+      required: [pairing_token, server_url]
+      properties:
+        pairing_token: { type: string }
+        server_url:
+          type: string
+          format: uri
+          description: |
+            The URL the client was given. Checked against the one the token was
+            minted for, so a relayed code cannot redirect the key elsewhere.
+        device_name:
+          type: string
+          maxLength: 120
+          description: Optional label for the server's log.
+
+    PairingClaimResponse:
+      type: object
+      required: [api_key, server_url, contract, request_id]
+      properties:
+        api_key:
+          type: string
+          description: The durable key. This response is the only place it appears.
+        server_url: { type: string, format: uri }
+        contract: { type: string, const: caret/v1 }
+        service: { type: string }
+        version: { type: string }
+        capabilities:
+          type: object
+          description: |
+            Same shape as `Health.capabilities`, so a client is configured and
+            knows what the backend can do in one round trip.
+        readiness:
+          type: object
+          description: Same shape as `Health.readiness`.
+        token_id: { type: string }
+        request_id: { type: string }
+
+    PairingRevokeRequest:
+      type: object
+      description: Provide a `token_id`, or set `all` to true.
+      properties:
+        token_id: { type: string }
+        all:
+          type: boolean
+          description: Revoke every pending token.
 
     TextInput:
       type: object

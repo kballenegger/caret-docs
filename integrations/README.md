@@ -22,13 +22,21 @@ supported path, and that is stated rather than papered over.
 | Hermes | Skills: `hermes skills install <identifier or direct HTTP(S) URL to a SKILL.md>`, documented in `hermes skills install --help`. (Hermes also has `hermes plugins install <git-url>`, but its plugin manifest format is not documented in the CLI help, so nothing is claimed for it.) | **Packaged as an installable skill.** | No verified interface. A Hermes install may have voice/media providers configured, but there is no documented stable CLI contract this backend could call — so nothing is claimed. Same fallbacks. | [`hermes/caret-connect/SKILL.md`](hermes/caret-connect/SKILL.md) |
 | Codex | `codex plugin` exists but only installs from configured marketplace snapshots; no third-party authoring/manifest path is documented in the CLI help. | **Universal adapter** (`CARET_AGENT=codex`). No plugin is claimed without a documented authoring path. | No — text-only non-interactive interface. Same fallbacks. | — |
 | OpenClaw | Not installed on the development machine; no interface of any kind could be verified. | **Universal adapter** (`CARET_AGENT=openclaw` + explicit `CARET_AGENT_COMMAND`), labelled not-yet-verified. | Unverified — nothing is claimed. Same fallbacks. | — |
-| Custom HTTP / hosted (GrokBot path) | A hosted agent has no host runtime to install anything into; the narrow `POST {"prompt"} → {"text"}` contract *is* the integration. | **Universal adapter** (`CARET_AGENT=custom-http`). | No — the contract is text-JSON by definition. Hosted STT has its own lane (`CARET_STT_HTTP_URL`); images need `CARET_IMAGE_COMMAND`. | — |
+| GrokBot | GrokBot hosts the reference backend inside its own system rather than installing a plugin into a local CLI; the `task`-discriminated endpoint it implements *is* the integration. | **First-party adapter** (`CARET_AGENT=grokbot`) — its own preset, not `custom-http`. | **Imagine: yes**, opt-in via `CARET_GROKBOT_IMAGE=on`, served by GrokBot's own image capability — the only shipped preset that routes Imagine through the agent. STT: no verified non-interactive transcription interface, so nothing is claimed and dictation stays on the backend's own STT lane. | [`../agent-prompts/connect-grok.md`](../agent-prompts/connect-grok.md) (public configuration contract; no live GrokBot deployment exercised from this repo) |
+| Custom HTTP / hosted (generic) | A hosted agent has no host runtime to install anything into; the narrow `POST {"prompt"} → {"text"}` contract *is* the integration. This is the fallback for runtimes with no named preset. | **Universal adapter** (`CARET_AGENT=custom-http`). | No — the contract is text-JSON by definition. Hosted STT has its own lane (`CARET_STT_HTTP_URL`); images need `CARET_IMAGE_COMMAND`. | — |
 
 Capability routing is mechanical, not aspirational: the backend routes
 STT/Imagine through an agent adapter only when that adapter implements
 `transcribe()`/`generate()` (see
 [reference-backend/README.md](../reference-backend/README.md#capability-routing)),
 and health's `routes` block reports what actually resolved.
+
+Dictation is the exception to "every capability is optional": a valid
+`caret/v1` backend must serve it. No runtime in the table above provides
+it, so every row depends on the backend's own STT lane, and a backend
+with none reports `status: not_ready` rather than pretending to be a
+Caret backend. Ask and Imagine stay optional and are reported honestly
+off.
 
 ## Installing
 

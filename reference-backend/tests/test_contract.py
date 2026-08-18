@@ -65,6 +65,105 @@ class HealthTests(ServerCase):
         self.assertEqual(bad["auth"], {"presented": True, "valid": False})
 
 
+class DictationIsMandatoryTests(unittest.TestCase):
+    """Dictate is not one capability among three.
+
+    A valid Caret backend takes speech. Ask and Imagine are optional
+    extensions on top of that, and a backend advertising Ask with Dictate
+    off is not a lightweight deployment — it is a broken one, and it has to
+    say so rather than reporting `ok`."""
+
+    def test_a_backend_with_stt_and_keys_is_ready(self):
+        server = TestServer()
+        self.addCleanup(server.close)
+        _, health, _ = server.request("GET", "/v1/health", key=None)
+        self.assertEqual(health["status"], "ok")
+        self.assertEqual(health["readiness"], {"ready": True, "blockers": []})
+        self.assertTrue(health["capabilities"]["dictation"])
+
+    def test_no_stt_is_not_ready_and_never_reports_ok(self):
+        server = TestServer(transcriber=adapters.NullTranscriber())
+        self.addCleanup(server.close)
+        _, health, _ = server.request("GET", "/v1/health", key=None)
+        self.assertEqual(health["status"], "not_ready")
+        self.assertFalse(health["readiness"]["ready"])
+        self.assertIn(
+            "no_stt_adapter", [b["code"] for b in health["readiness"]["blockers"]]
+        )
+        self.assertEqual(health["routes"]["dictation"], {"route": "off"})
+
+    def test_ask_on_with_dictate_off_is_still_not_ready(self):
+        # The exact shape the public docs must never present as valid.
+        server = TestServer(
+            agent=adapters.EchoAgent(),
+            transcriber=adapters.NullTranscriber(),
+            image_generator=None,
+        )
+        self.addCleanup(server.close)
+        _, health, _ = server.request("GET", "/v1/health", key=None)
+        self.assertTrue(health["capabilities"]["draft"])
+        self.assertFalse(health["capabilities"]["dictation"])
+        self.assertEqual(health["status"], "not_ready")
+
+    def test_missing_keys_is_degraded_and_missing_stt_outranks_it(self):
+        server = TestServer(api_keys=(), transcriber=adapters.NullTranscriber())
+        self.addCleanup(server.close)
+        _, health, _ = server.request("GET", "/v1/health", key=None)
+        self.assertEqual(health["status"], "not_ready")
+        self.assertEqual(
+            sorted(b["code"] for b in health["readiness"]["blockers"]),
+            ["no_api_keys", "no_stt_adapter"],
+        )
+
+
+class AskIsOptionalTests(unittest.TestCase):
+    """No agent configured is a valid dictation-only backend — provided it
+    reports that, and does not answer drafts with a stand-in."""
+
+    def server(self, **overrides):
+        server = TestServer(agent=adapters.NullAgent(), **overrides)
+        self.addCleanup(server.close)
+        return server
+
+    def test_health_reports_ask_off_but_stays_ready(self):
+        _, health, _ = self.server().request("GET", "/v1/health", key=None)
+        self.assertEqual(health["status"], "ok")
+        self.assertTrue(health["readiness"]["ready"])
+        self.assertFalse(health["capabilities"]["draft"])
+        self.assertNotIn("draft", health["capabilities"]["input_modes"])
+        self.assertEqual(health["routes"]["ask"], {"route": "off"})
+        self.assertEqual(health["routes"]["cleanup"], {"route": "off"})
+        self.assertEqual(health["adapters"]["agent"], "none")
+
+    def test_draft_is_404_not_an_echo(self):
+        status, body, _ = self.server().request(
+            "POST",
+            "/v1/draft",
+            body={"client_request_id": "c1", "input": {"type": "text", "text": "hi"}},
+        )
+        self.assertEqual(status, 404, body)
+        self.assertEqual(body["error"]["code"], "not_found")
+
+    def test_dictation_still_works_and_returns_the_raw_transcript(self):
+        server = self.server()
+        session_id = server.open_session()
+        server.upload(session_id, 0, pcm(1500))
+        status, body, _ = server.request(
+            "POST",
+            f"/v1/dictation/sessions/{session_id}/transcript",
+            body={
+                "client_chunk_count": 1,
+                "client_total_duration_ms": 1500,
+                "polish": True,
+            },
+        )
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["status"], "complete")
+        # `polish: true` was asked for and cannot be served without an agent;
+        # the transcript comes back raw rather than the request failing.
+        self.assertIn("transcribed", body["text"])
+
+
 class CapabilityHonestyTests(unittest.TestCase):
     def test_a_backend_without_a_transcriber_says_so_and_refuses_audio(self):
         server = TestServer(transcriber=adapters.NullTranscriber(), image_generator=None)

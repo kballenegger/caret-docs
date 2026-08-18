@@ -64,6 +64,22 @@ SECRET_PATTERNS = (
     re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}"),  # JWTs
 )
 
+# Redaction-fragile secret assignments. A shell line that assigns a
+# command substitution to a key-shaped variable — CARET_API_KEYS, then an
+# equals sign, then a `$(…)` that generates the key inline (spelled apart
+# here so this file does not trip its own rule) — is correct shell
+# but publishes badly: naive secret scrubbers — in CI log
+# masks, chat integrations, agent harnesses that read these pages — match
+# `…KEY(S)=` and replace everything up to the first space, which turns the
+# line into `export CARET_API_KEYS=*** -c 'import secrets;…')"`. That is
+# not executable, and a reader who pastes it gets a shell error instead of
+# a key. Keep the generator on its own line and the assigned value a
+# single whitespace-free token, so the worst a scrubber can do is mask a
+# placeholder that was already meant to be replaced.
+FRAGILE_SECRET_ASSIGNMENT = re.compile(
+    r"\b[A-Z][A-Z0-9_]*(?:KEY|KEYS|SECRET|TOKEN|PASSWORD)\s*=\s*[\"']?(?:\$\(|`)"
+)
+
 SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2", ".pyc"}
 
 
@@ -106,6 +122,13 @@ def scan_text(text: str, origin: str) -> list[str]:
                 findings.append(
                     f"{origin}:{lineno}: credential-shaped string {match.group(0)[:12]!r}…"
                 )
+        match = FRAGILE_SECRET_ASSIGNMENT.search(line)
+        if match:
+            findings.append(
+                f"{origin}:{lineno}: redaction-fragile secret assignment "
+                f"{match.group(0)!r} — put the generator on its own line and "
+                f"assign a single whitespace-free token"
+            )
     return findings
 
 

@@ -42,7 +42,21 @@ class ScanTextTests(unittest.TestCase):
         self.assert_flags("gh ghp_" + "abcdefghij0123456789")
         self.assert_flags("-----BEGIN RSA " + "PRIVATE KEY-----")
 
+    def test_flags_redaction_fragile_secret_assignments(self):
+        # The exact shape that shipped broken: a scrubber masks everything
+        # after `KEYS=` up to the first space and leaves unrunnable shell.
+        # Assembled from fragments so this file stays clean itself.
+        sub = "$" + "(python3 -c 'import secrets;print(1)')"
+        self.assert_flags(f'export CARET_API_KEYS="{sub}"')
+        self.assert_flags("MY_TOKEN=" + "`date`")
+        self.assert_flags("export SOME_SECRET=" + "$" + "(cat /tmp/x)")
+
     def test_clean_public_content_passes(self):
+        self.assert_clean("export CARET_API_KEYS=paste-the-key-here")
+        self.assert_clean("python3 -c 'import secrets;print(secrets.token_urlsafe(32))'")
+        self.assert_clean('curl -H "Authorization: Bearer $CARET_API_KEYS" …')
+        self.assert_clean("export CARET_AGENT_HTTP_BEARER='whatever-you-check'")
+
         self.assert_clean("curl -fsSLO https://docs.typewithcaret.com/x.py")
         self.assert_clean("export CARET_AGENT=claude-code")
         self.assert_clean("generate with secrets.token_urlsafe(32)")

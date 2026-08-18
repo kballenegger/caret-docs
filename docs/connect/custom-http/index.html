@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Connect a hosted agent to Caret (custom HTTP)</title>
-<meta name="description" content="Runbook: the Caret reference backend with a hosted agent as its Ask adapter — one JSON POST per draft (the GrokBot path) — plus the backend's own STT lane for dictation.">
+<meta name="description" content="Runbook: the Caret reference backend with any hosted agent as its optional Ask adapter — one JSON POST per draft — plus the backend's own mandatory STT lane for dictation.">
 <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
 </head>
@@ -27,11 +27,21 @@
   <p class="kicker">connect · custom-http</p>
   <h1>A hosted agent behind your keyboard.</h1>
   <p class="lead">
-    For agents that are not a local CLI: a GrokBot-style bot you already
-    host, a service on a box you rent, anything you can put one HTTP endpoint
-    in front of. The reference backend forwards each draft as a single JSON
-    POST.
+    The generic fallback, for agents that are neither a local CLI nor one of
+    the named presets: a service on a box you rent, an internal bot, anything
+    you can put one HTTP endpoint in front of. The reference backend forwards
+    each draft as a single JSON POST.
   </p>
+
+  <div class="note">
+    <strong>Looking for GrokBot?</strong>
+    <p style="margin:0.4rem 0 0">
+      GrokBot is a first-party backend with its own preset and its own
+      runbook — <a href="/connect/grokbot/">connect/grokbot/</a> — not a
+      <code>custom-http</code> deployment. It serves Ask <em>and</em> Imagine
+      from its own model. Use this page only when no named preset fits.
+    </p>
+  </div>
 
   <div class="note">
     <strong>Status: backend-supported</strong>
@@ -79,7 +89,7 @@ Authorization: Bearer &lt;CARET_AGENT_HTTP_BEARER&gt;     // only if you set one
 
   <h2>1 · Stand up the endpoint next to your agent</h2>
   <p>
-    Wherever the agent lives — the GrokBot's host, your VPS, a PaaS — add one
+    Wherever the agent lives — your VPS, a PaaS, a box on your LAN — add one
     route that receives <code>{"prompt"}</code>, calls the agent
     <em>text-in, text-out</em>, and returns <code>{"text"}</code>. Keep it as
     dumb as possible:
@@ -105,8 +115,8 @@ cd caret-docs/reference-backend
 export CARET_AGENT=custom-http
 export CARET_AGENT_HTTP_URL='https://agent.yourdomain.com/caret-draft'
 export CARET_AGENT_HTTP_BEARER='…'           # whatever your endpoint checks
-export CARET_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
-echo "$CARET_API_KEYS"                       # paste this into Caret later
+python3 -c 'import secrets;print(secrets.token_urlsafe(32))'  # generate a key — copy the output
+export CARET_API_KEYS=paste-the-key-here                      # paste this into Caret later
 
 python3 -m caret_backend --check
 python3 -m caret_backend --port 8787</code></pre>
@@ -117,7 +127,7 @@ python3 -m caret_backend --port 8787</code></pre>
     presents to your endpoint. Neither is ever logged.
   </p>
 
-  <h2>Dictation</h2>
+  <h2>Dictation — mandatory, and not through this endpoint</h2>
   <p>
     STT never goes through the drafting endpoint — its contract is text-only.
     Dictation uses the backend's own STT lane: local
@@ -126,6 +136,13 @@ python3 -m caret_backend --port 8787</code></pre>
     via <code>CARET_STT_HTTP_URL</code> (one WAV POST →
     <code>{"text"}</code>), or any command via <code>CARET_STT_COMMAND</code>.
     See <a href="/connect/#stt">the STT section of the Connect overview</a>.
+  </p>
+  <p>
+    Dictation is <strong>required</strong>: a backend with no working STT
+    adapter reports <code>"status": "not_ready"</code> with the
+    <code>no_stt_adapter</code> blocker, <code>--check</code> fails, and the
+    connection QR refuses to generate. A hosted Ask endpoint with no STT is
+    not a valid Caret backend, however well the drafts read.
   </p>
 
   <h2>3 · Smoke-test the whole chain</h2>
@@ -151,6 +168,16 @@ curl -s -X POST localhost:8787/v1/draft \
     expose the backend to your phone with
     <code>tailscale serve --bg 8787</code>. Then pair as always: URL + key in
     Caret settings; the health check reports what actually resolved.
+  </p>
+  <p>Or scan instead of typing, once <code>--check</code> passes:</p>
+  <pre><code>python3 -m caret_backend --qr --url https://your-backend.example</code></pre>
+  <p>
+    That prints a <code>caret-connect:v1</code> symbol carrying the base URL
+    and the key; <code>--save ~/caret-connect.png</code> writes an owner-only
+    PNG instead. It refuses while any readiness blocker stands.
+    <strong>The code <em>is</em> the credential</strong> — anyone who scans it
+    can use this backend until you rotate <code>CARET_API_KEYS</code>. Format
+    and warnings: <a href="/connect/#qr">the connection QR</a>.
   </p>
 
   <h2>Troubleshooting</h2>

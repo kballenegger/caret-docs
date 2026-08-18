@@ -102,14 +102,19 @@
     </tr>
   </table>
   <p>
-    Only Ask and health are required. A text-only backend is a complete
-    backend — say so in <code>capabilities</code> and Caret hides the rest.
-    In the reference backend every surface is <em>capability-routed</em>:
-    your agent answers Ask and cleans up transcripts (as a constrained
-    text-only request); speech is transcribed first — by local OpenWhisper
-    by default, since no agent runtime has a verified transcription
-    interface — and only then does text reach the agent; images come from
-    the provider you configure, or stay honestly off.
+    <strong>Dictate is mandatory; Ask and Imagine are not.</strong> A valid
+    <code>caret/v1</code> backend takes speech and advertises
+    <code>"dictation": true</code>. Anything else it does not provide it
+    says so in <code>capabilities</code>, and Caret hides that surface —
+    a dictation-only backend is a complete backend. In the reference
+    backend every surface is <em>capability-routed</em>: speech is
+    transcribed by its own STT lane — local OpenWhisper by default, since
+    no agent runtime has a verified transcription interface — and only
+    then does text reach the agent, which answers Ask and cleans up
+    transcripts (as a constrained text-only request); images come from the
+    provider you configure, or stay honestly off. With no STT resolved the
+    backend reports <code>"status": "not_ready"</code> rather than
+    pretending to be a Caret backend.
   </p>
 
   <h2>One input model</h2>
@@ -157,14 +162,18 @@
   <pre><code>git clone https://github.com/kballenegger/caret-docs.git
 cd caret-docs/reference-backend
 
-export CARET_AGENT=claude-code              # hermes | codex | openclaw | custom-http
-export CARET_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+export CARET_AGENT=claude-code              # hermes | codex | grokbot | openclaw | custom-http
+python3 -c 'import secrets;print(secrets.token_urlsafe(32))'  # generate a key — copy the output
+export CARET_API_KEYS=paste-the-key-here                      # the same key goes into the Caret app
 python3 -m caret_backend --check
 python3 -m caret_backend --port 8787</code></pre>
   <p>
+    Then hand the phone a code instead of a 43-character key:
+    <code>python3 -m caret_backend --qr --url https://your-host</code>.
     <a href="/connect/">The Connect guide</a> covers TLS, per-runtime
-    runbooks, dictation via OpenWhisper, and the compatibility matrix. The
-    machine-readable contract is at
+    runbooks, dictation via OpenWhisper, the
+    <a href="/connect/#qr">connection QR</a>, and the compatibility matrix.
+    The machine-readable contract is at
     <a href="/openapi.yaml"><code>openapi.yaml</code></a>.
   </p>
 

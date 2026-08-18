@@ -23,13 +23,16 @@ the authoritative version of these steps. In short:
    cd caret-docs/reference-backend
    ```
 
-2. **Configure.** Hermes as the Ask adapter; STT defaults to local
-   OpenWhisper when `whisper` is installed (dictation reports honestly
-   off otherwise):
+2. **Configure.** Hermes as the optional Ask adapter. Dictation is
+   **mandatory**: STT defaults to local OpenWhisper when `whisper` is on
+   PATH, otherwise set `CARET_STT_HTTP_URL` or `CARET_STT_COMMAND`.
+   With none resolved, `--check` fails and health reports
+   `"status": "not_ready"` — that is not a backend you may hand over:
 
    ```sh
    export CARET_AGENT=hermes
-   export CARET_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+   python3 -c 'import secrets;print(secrets.token_urlsafe(32))'  # generate a key — copy the output
+   export CARET_API_KEYS=paste-the-key-here                      # the same key goes into the Caret app
    ```
 
    The preset runs stock documented syntax only: `hermes chat -q
@@ -48,9 +51,11 @@ the authoritative version of these steps. In short:
    curl -s http://127.0.0.1:8787/v1/health | python3 -m json.tool
    ```
 
-   Health must report `"status": "ok"`, honest capabilities, and
-   `"adapters": {"agent": "hermes", …}`. Run one real draft with the
-   key; a wrong key must get 401.
+   Health must report `"status": "ok"`,
+   `"readiness": {"ready": true, "blockers": []}`, honest capabilities
+   with `"dictation": true`, and
+   `"adapters": {"agent": "hermes", …}`. Run one real draft and one real
+   transcription with the key; a wrong key must get 401.
 
 4. **Put TLS in front** (Caret requires `https://`): `tailscale serve
    --bg 8787` on a tailnet the phone joins (recommended), or a reverse
@@ -58,8 +63,19 @@ the authoritative version of these steps. In short:
    loopback. Keep it alive with launchd/systemd — the runbook at
    <https://docs.typewithcaret.com/connect/hermes/> has both paths.
 
-5. **Hand over** the final `https://` base URL and the API key; the user
-   pastes both into Caret's settings. The key lives in the environment,
-   never in a committed file.
+5. **Hand over a connection QR** — only once step 3 passes over the
+   final `https://` URL:
+
+   ```sh
+   python3 -m caret_backend --qr --url https://<the final base URL>
+   ```
+
+   Caret scans it and configures itself: base URL and key in one step.
+   **The code is the credential** — it carries the API key, so never log
+   it, never paste the payload anywhere, and tell the user that anyone who
+   scans it can use the backend until they rotate `CARET_API_KEYS`. Show
+   it to one phone, then delete any saved file. The manual fallback is the
+   two strings, given in a secure channel. The key lives in the
+   environment, never in a committed file.
 
 Report honestly anything that does not verify.

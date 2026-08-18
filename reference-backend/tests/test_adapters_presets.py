@@ -68,7 +68,8 @@ class AgentPresetTests(unittest.TestCase):
     def test_unknown_preset_is_refused_with_the_valid_list(self):
         with self.assertRaises(CaretError) as ctx:
             adapters.agent_from_env({"CARET_AGENT": "skynet"})
-        self.assertIn("custom-http", ctx.exception.message)
+        for preset in ("custom-http", "grokbot", "off"):
+            self.assertIn(preset, ctx.exception.message)
 
     def test_auto_picks_the_first_installed_runtime(self):
         installed = {"claude"}
@@ -78,10 +79,35 @@ class AgentPresetTests(unittest.TestCase):
             agent = adapters.agent_from_env({})
         self.assertEqual(agent.name, "claude-code")
 
-    def test_auto_falls_back_to_echo_when_nothing_is_installed(self):
+    def test_auto_falls_back_to_no_agent_never_to_the_stand_in(self):
+        # Ask is optional, so "nothing installed" is a valid backend — but
+        # it must be an honest one. Falling back to EchoAgent here would
+        # ship a backend that answers every draft with a stand-in and looks
+        # healthy doing it.
         with mock.patch.object(adapters.shutil, "which", return_value=None):
             agent = adapters.agent_from_env({})
-        self.assertIsInstance(agent, adapters.EchoAgent)
+        self.assertIsInstance(agent, adapters.NullAgent)
+        self.assertNotIsInstance(agent, adapters.EchoAgent)
+
+    def test_the_stand_in_is_only_ever_selected_explicitly(self):
+        self.assertIsInstance(adapters.agent_from_env({"CARET_AGENT": "echo"}), adapters.EchoAgent)
+
+    def test_off_selects_no_agent(self):
+        for value in ("off", "none"):
+            self.assertIsInstance(
+                adapters.agent_from_env({"CARET_AGENT": value}), adapters.NullAgent
+            )
+
+    def test_no_agent_refuses_every_surface_rather_than_answering(self):
+        agent = adapters.NullAgent()
+        for call in (
+            lambda: agent.complete("hi"),
+            lambda: agent.draft(instruction="hi", visible_text=None, app_hint=None),
+            lambda: agent.polish("hi"),
+        ):
+            with self.assertRaises(CaretError) as ctx:
+                call()
+            self.assertEqual(ctx.exception.status, 404)
 
 
 class CommandSafetyTests(unittest.TestCase):
@@ -210,6 +236,134 @@ class HttpAgentTests(_StubServerMixin, unittest.TestCase):
         )
         self.assertIsInstance(agent, adapters.HttpAgent)
 
+    def test_custom_http_is_not_grokbot(self):
+        # They are different backends with different capability surfaces.
+        # Selecting one must never quietly give you the other.
+        agent = adapters.agent_from_env(
+            {
+                "CARET_AGENT": "custom-http",
+                "CARET_AGENT_HTTP_URL": "https://example.com/draft",
+            }
+        )
+        self.assertNotIsInstance(agent, adapters.GrokBotAgent)
+        self.assertEqual(agent.name, "custom-http")
+
+
+class GrokBotTests(_StubServerMixin, unittest.TestCase):
+    """GrokBot as a first-party backend, against a stub.
+
+    What this proves is exactly one half of the integration: that this
+    backend speaks the documented contract correctly. The GrokBot side is a
+    public configuration contract a GrokBot deployment implements, and no
+    live GrokBot deployment has been exercised from this repository — the
+    Connect matrix says so, and so does this docstring."""
+
+    def env(self, url, **extra):
+        return {"CARET_AGENT": "grokbot", "CARET_GROKBOT_URL": url, **extra}
+
+    def test_ask_posts_the_ask_task_and_returns_text(self):
+        handler, url = self.start_upstream()
+        agent = adapters.agent_from_env(self.env(url))
+        text = agent.draft(instruction="say hi", visible_text=None, app_hint=None)
+        self.assertEqual(text, "hosted answer")
+        self.assertEqual(handler.seen[0]["body"]["task"], "ask")
+        self.assertIn("say hi", handler.seen[0]["body"]["prompt"])
+
+    def test_cleanup_is_a_distinct_task_carrying_the_constrained_framing(self):
+        handler, url = self.start_upstream()
+        agent = adapters.agent_from_env(self.env(url))
+        agent.polish("um so like the meeting is at four")
+        body = handler.seen[0]["body"]
+        self.assertEqual(body["task"], "cleanup")
+        self.assertIn("the meeting is at four", body["prompt"])
+        # The constraint has to travel with the request, not be assumed.
+        self.assertIn("do not answer it", body["prompt"].lower())
+
+    def test_bearer_is_sent_when_configured_and_absent_when_not(self):
+        handler, url = self.start_upstream()
+        adapters.agent_from_env(self.env(url, CARET_GROKBOT_BEARER="tok123")).complete("hi")
+        self.assertEqual(handler.seen[0]["auth"], "Bearer tok123")
+        handler2, url2 = self.start_upstream()
+        adapters.agent_from_env(self.env(url2)).complete("hi")
+        self.assertIsNone(handler2.seen[0]["auth"])
+
+    def test_images_off_by_default_so_imagine_is_not_advertised_falsely(self):
+        agent = adapters.agent_from_env(self.env("https://grok.example/caret"))
+        self.assertIsInstance(agent, adapters.GrokBotAgent)
+        self.assertFalse(adapters.agent_supports_imagine(agent))
+        self.assertIsNone(adapters.image_generator_from_env({}, agent=agent))
+
+    def test_images_on_routes_imagine_to_the_agent(self):
+        agent = adapters.agent_from_env(
+            self.env("https://grok.example/caret", CARET_GROKBOT_IMAGE="on")
+        )
+        self.assertIsInstance(agent, adapters.GrokBotImagingAgent)
+        self.assertTrue(adapters.agent_supports_imagine(agent))
+        self.assertIs(adapters.image_generator_from_env({}, agent=agent), agent)
+
+    def test_imagine_posts_the_imagine_task_and_decodes_a_png(self):
+        import base64
+
+        png = adapters.FakeImageGenerator._PNG
+        handler, url = self.start_upstream()
+        handler.behaviour = staticmethod(
+            lambda: (200, {"image_base64": base64.b64encode(png).decode()})
+        )
+        agent = adapters.agent_from_env(self.env(url, CARET_GROKBOT_IMAGE="on"))
+        self.assertEqual(agent.generate("a cat", aspect_ratio="square", quality="fast"), png)
+        body = handler.seen[0]["body"]
+        self.assertEqual(body["task"], "imagine")
+        self.assertEqual(body["aspect_ratio"], "square")
+        self.assertEqual(body["quality"], "fast")
+
+    def test_a_bad_image_response_is_a_503_not_a_corrupt_png(self):
+        handler, url = self.start_upstream()
+        agent = adapters.agent_from_env(self.env(url, CARET_GROKBOT_IMAGE="on"))
+        for behaviour in (
+            lambda: (200, {"text": "I can't draw"}),        # wrong key
+            lambda: (200, {"image_base64": "!!!not base64"}),
+            lambda: (200, {"image_base64": "aGVsbG8="}),     # valid base64, not a PNG
+            lambda: (500, {"error": "x"}),
+        ):
+            handler.behaviour = staticmethod(behaviour)
+            with self.assertRaises(CaretError) as ctx:
+                agent.generate("a cat", aspect_ratio="square", quality="fast")
+            self.assertEqual(ctx.exception.status, 503)
+
+    def test_grokbot_never_claims_stt(self):
+        for images in ("off", "on"):
+            agent = adapters.agent_from_env(
+                self.env("https://grok.example/caret", CARET_GROKBOT_IMAGE=images)
+            )
+            self.assertFalse(adapters.agent_supports_stt(agent))
+
+    def test_config_errors_are_specific(self):
+        with self.assertRaises(CaretError) as ctx:
+            adapters.agent_from_env({"CARET_AGENT": "grokbot"})
+        self.assertIn("CARET_GROKBOT_URL", ctx.exception.message)
+        with self.assertRaises(CaretError):
+            adapters.agent_from_env(self.env("file:///etc/passwd"))
+        with self.assertRaises(CaretError) as ctx:
+            adapters.agent_from_env(
+                self.env("https://grok.example/caret", CARET_GROKBOT_IMAGE="maybe")
+            )
+        self.assertIn("CARET_GROKBOT_IMAGE", ctx.exception.message)
+
+    def test_upstream_failures_map_to_contract_shaped_503(self):
+        handler, url = self.start_upstream()
+        agent = adapters.agent_from_env(self.env(url))
+        for behaviour in (
+            lambda: (500, {"error": "x"}),
+            lambda: (200, b"not json"),
+            lambda: (200, {"answer": "wrong key"}),
+            lambda: (200, {"text": "   "}),
+        ):
+            handler.behaviour = staticmethod(behaviour)
+            with self.assertRaises(CaretError) as ctx:
+                agent.complete("hi")
+            self.assertEqual(ctx.exception.status, 503)
+            self.assertIn("GrokBot", ctx.exception.message)
+
 
 class OpenWhisperTests(unittest.TestCase):
     def test_preset_uses_stock_documented_syntax(self):
@@ -312,14 +466,32 @@ class CapabilityRoutingTests(unittest.TestCase):
         def generate(self, prompt, *, aspect_ratio, quality):
             return b"\x89PNG fake"
 
-    def test_no_shipped_preset_claims_stt_or_imagine(self):
-        for preset in list(adapters.AGENT_PRESETS) + ["custom-http"]:
+    def test_no_shipped_preset_claims_stt(self):
+        # Dictation is mandatory, and no agent runtime has a verified
+        # non-interactive transcription interface — so STT is always the
+        # backend's own lane. If this ever fails, the docs are now lying.
+        for preset in list(adapters.AGENT_PRESETS) + ["custom-http", "grokbot"]:
             env = {"CARET_AGENT": preset}
             if preset == "custom-http":
                 env["CARET_AGENT_HTTP_URL"] = "https://example.com/draft"
+            if preset == "grokbot":
+                env["CARET_GROKBOT_URL"] = "https://grok.example/caret"
+                env["CARET_GROKBOT_IMAGE"] = "on"
             agent = adapters.agent_from_env(env)
             self.assertFalse(adapters.agent_supports_stt(agent), preset)
-            self.assertFalse(adapters.agent_supports_imagine(agent), preset)
+
+    def test_grokbot_with_images_is_the_only_preset_that_claims_imagine(self):
+        claims = set()
+        for preset in list(adapters.AGENT_PRESETS) + ["custom-http", "grokbot", "echo", "off"]:
+            for images in ("off", "on"):
+                env = {"CARET_AGENT": preset, "CARET_GROKBOT_IMAGE": images}
+                if preset == "custom-http":
+                    env["CARET_AGENT_HTTP_URL"] = "https://example.com/draft"
+                if preset == "grokbot":
+                    env["CARET_GROKBOT_URL"] = "https://grok.example/caret"
+                if adapters.agent_supports_imagine(adapters.agent_from_env(env)):
+                    claims.add((preset, images))
+        self.assertEqual(claims, {("grokbot", "on")})
 
     def test_auto_routes_stt_through_an_agent_that_transcribes(self):
         agent = self.TranscribingAgent()

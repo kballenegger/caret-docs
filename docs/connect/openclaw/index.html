@@ -74,7 +74,8 @@ cd caret-docs/reference-backend
 export CARET_AGENT=openclaw
 # YOUR verified invocation — this example shape is illustrative, not documentation:
 export CARET_AGENT_COMMAND='openclaw-draft-wrapper {prompt}'
-export CARET_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+python3 -c 'import secrets;print(secrets.token_urlsafe(32))'  # generate a key — copy the output
+export CARET_API_KEYS=paste-the-key-here                      # the same key goes into the Caret app
 
 python3 -m caret_backend --check</code></pre>
   <p>
@@ -103,7 +104,7 @@ curl -s -X POST localhost:8787/v1/draft \
     page's label changes.
   </p>
 
-  <h2>Dictation</h2>
+  <h2>Dictation — mandatory</h2>
   <p>
     STT does not go through OpenClaw — even if your install has voice
     features, no stable transcription contract could be verified, so nothing
@@ -111,6 +112,17 @@ curl -s -X POST localhost:8787/v1/draft \
     <a href="https://github.com/openai/whisper">OpenWhisper</a> by default
     when installed, or the adapter you configure. See
     <a href="/connect/#stt">the STT section of the Connect overview</a>.
+  </p>
+  <p>
+    And it is required. With no STT adapter resolved, health reports
+    <code>"status": "not_ready"</code> with the <code>no_stt_adapter</code>
+    blocker, <code>--check</code> exits non-zero, and the connection QR
+    refuses to generate.
+  </p>
+  <p>
+    Note the order this implies: an unverified Ask preset is a valid,
+    optional gap, but no STT adapter is not. A backend here can legitimately
+    ship with Ask off — it cannot ship with dictation off.
   </p>
 
   <h2>3 · Host modes</h2>
@@ -126,6 +138,17 @@ curl -s -X POST localhost:8787/v1/draft \
   </p>
 
   <h2>4 · Pair with Caret</h2>
+  <p>Scan a code, or type two strings. The scan is one command:</p>
+  <pre><code>python3 -m caret_backend --qr --url https://your-backend.example</code></pre>
+  <p>
+    That prints a <code>caret-connect:v1</code> symbol carrying the base URL
+    and the key; <code>--save ~/caret-connect.png</code> writes an owner-only
+    PNG instead. It refuses while any readiness blocker stands.
+    <strong>The code <em>is</em> the credential</strong> — anyone who scans it
+    can use this backend until you rotate <code>CARET_API_KEYS</code>. Format
+    and warnings: <a href="/connect/#qr">the connection QR</a>.
+  </p>
+  <p>Or by hand:</p>
   <p>
     URL + key in Caret settings; the health check shows
     <code>"agent": "openclaw"</code> in the adapters block and reports what

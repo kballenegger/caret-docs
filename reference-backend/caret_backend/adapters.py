@@ -47,19 +47,52 @@ Agent presets (`CARET_AGENT`)
     could be verified, so selecting it without an explicit
     `CARET_AGENT_COMMAND` is a startup error, not a guess.
 
+`grokbot`
+    A first-party agent backend, not a special case of `custom-http`.
+    GrokBot hosts this reference backend inside its own system and serves
+    the agent surfaces natively from its own LLM, over one endpoint
+    (`CARET_GROKBOT_URL`) that discriminates on a `task` field:
+
+        {"task": "ask",     "prompt"}                  → {"text"}
+        {"task": "cleanup", "prompt"}                  → {"text"}
+        {"task": "imagine", "prompt", "aspect_ratio",
+                            "quality"}                 → {"image_base64"}
+
+    Ask and the constrained transcript cleanup are always GrokBot's own
+    LLM. Imagine is served natively by GrokBot too, but only when its
+    image capability is enabled (`CARET_GROKBOT_IMAGE=on`) — that is the
+    one shipped preset whose adapter can carry the Imagine capability, so
+    capability routing sends Imagine to the agent instead of leaving it
+    off. STT is not part of the contract: no stable non-interactive
+    GrokBot transcription interface was verified, so dictation stays on
+    the backend's own STT lane.
+
+    Nothing here is reverse-engineered from GrokBot internals. This is a
+    public configuration contract that a GrokBot deployment implements on
+    its side; the backend half is covered by the hermetic suite, and no
+    live GrokBot run has been performed from this repository.
+
 `custom-http`
-    A hosted agent behind a narrow JSON contract: one
+    The generic fallback for any *other* hosted agent: one
     `POST {"prompt"} → {"text"}` per call to `CARET_AGENT_HTTP_URL`, with
-    an optional bearer token that is sent and never logged.
+    an optional bearer token that is sent and never logged. Text-only by
+    definition — neither STT nor Imagine routes through it.
+
+`off`
+    No Ask adapter. Ask is optional in caret/v1: a backend with no agent
+    reports `draft: false` and answers 404 rather than pretending with a
+    stand-in.
 
 `echo`
     A dependency-free stand-in that reflects the prompt. The conformance
     checker and the test suite run against it, so you can verify contract
-    conformance without spending a single model token.
+    conformance without spending a single model token. Explicit only —
+    never auto-selected, because a stand-in that looks like a working
+    agent is exactly the dishonesty this backend avoids.
 
 `auto` (the default)
     The first of hermes, claude-code, codex whose executable is on PATH;
-    otherwise echo.
+    otherwise `off`.
 
 Other agents
     Set `CARET_AGENT_COMMAND` to any command line. `{prompt}` is replaced
@@ -286,17 +319,72 @@ class CommandAgent(_DraftPolishMixin):
         return text
 
 
+def post_json(
+    url: str,
+    payload: dict,
+    *,
+    bearer: str = "",
+    timeout: int,
+    what: str,
+) -> dict:
+    """One JSON POST, with every failure shaped like the caret/v1 envelope.
+
+    Non-200, unreachable, timeout and non-JSON all become a retryable 503
+    naming `what` — the caller never sees a urllib exception. The bearer
+    token is sent and never logged."""
+    body = json.dumps(payload).encode()
+    headers = {"Content-Type": "application/json"}
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read(MAX_HTTP_RESPONSE_BYTES)
+    except urllib.error.HTTPError as exc:
+        raise CaretError(
+            503, "internal_error", f"{what} answered HTTP {exc.code}", retryable=True
+        ) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise CaretError(503, "internal_error", f"{what} unreachable", retryable=True) from exc
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise CaretError(
+            503, "internal_error", f"{what} returned invalid JSON", retryable=True
+        ) from exc
+    if not isinstance(payload, dict):
+        raise CaretError(
+            503, "internal_error", f"{what} returned a non-object body", retryable=True
+        )
+    return payload
+
+
+def _require_text(payload: dict, what: str) -> str:
+    text = payload.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise CaretError(
+            503, "internal_error", f'{what} response has no "text"', retryable=True
+        )
+    return text.strip()
+
+
 @dataclass
 class HttpAgent(_DraftPolishMixin):
-    """A hosted agent behind a narrow JSON contract (the custom-http /
-    GrokBot path). One POST per call:
+    """The generic hosted-agent fallback (`custom-http`) — any agent you can
+    put behind one narrow JSON contract. One POST per call:
 
         request   {"prompt": "<framed prompt>"}
         response  {"text": "<the answer>"}          (HTTP 200)
 
     Anything else — non-200, unreachable, non-JSON, missing/empty `text` —
     is a contract-shaped 503. The optional bearer token is sent, never
-    logged."""
+    logged.
+
+    Text only, by definition: this contract carries no audio and no image
+    bytes, so a `custom-http` backend routes neither dictation nor Imagine
+    through the agent. A first-party backend that does more than text gets
+    its own adapter — see `GrokBotAgent` — rather than overloading this
+    one."""
 
     name: str
     url: str
@@ -304,39 +392,168 @@ class HttpAgent(_DraftPolishMixin):
     timeout: int = DRAFT_TIMEOUT_SECONDS
 
     def complete(self, prompt: str) -> str:
-        body = json.dumps({"prompt": prompt}).encode()
-        headers = {"Content-Type": "application/json"}
-        if self.bearer:
-            headers["Authorization"] = f"Bearer {self.bearer}"
-        request = urllib.request.Request(self.url, data=body, headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                raw = response.read(MAX_HTTP_RESPONSE_BYTES)
-        except urllib.error.HTTPError as exc:
+        payload = post_json(
+            self.url,
+            {"prompt": prompt},
+            bearer=self.bearer,
+            timeout=self.timeout,
+            what="upstream agent",
+        )
+        return _require_text(payload, "upstream agent")
+
+
+# ------------------------------------------------------------------- grokbot
+#
+# GrokBot is a first-party agent backend, not a `custom-http` deployment.
+# The difference is not the transport — it is the capability surface. A
+# GrokBot deployment hosts this reference backend inside its own system and
+# serves the agent surfaces from its own LLM, so:
+#
+#   * Ask is GrokBot's LLM, natively;
+#   * cleanup is the same LLM under the same constrained framing this
+#     backend applies to every agent (text in, text out, no actions);
+#   * Imagine is GrokBot's own image capability, natively — when the
+#     operator has enabled it (`CARET_GROKBOT_IMAGE=on`).
+#
+# One endpoint carries all three, discriminated by `task`, so a GrokBot
+# deployment exposes a single route rather than three. `task` is explicit
+# rather than inferred from the prompt: the GrokBot side needs to pick its
+# no-tools path for cleanup deterministically, not by reading prose.
+#
+# What is NOT claimed here: nothing in this adapter is derived from GrokBot
+# internals, and no live GrokBot deployment has been exercised from this
+# repository. This is a public configuration contract — a GrokBot operator
+# implements the endpoint on their side, and the hermetic suite covers this
+# side of it against a stub. The Connect matrix labels it accordingly.
+#
+# STT is deliberately absent: no stable non-interactive GrokBot
+# transcription interface was verified, so dictation stays on the backend's
+# own STT lane, exactly as it does for every other preset.
+
+GROKBOT_TASK_ASK = "ask"
+GROKBOT_TASK_CLEANUP = "cleanup"
+GROKBOT_TASK_IMAGINE = "imagine"
+
+
+@dataclass
+class GrokBotAgent(_DraftPolishMixin):
+    """GrokBot serving Ask and cleanup from its own LLM.
+
+        request   {"task": "ask"|"cleanup", "prompt": "<framed prompt>"}
+        response  {"text": "<the answer>"}          (HTTP 200)
+
+    Failures are contract-shaped 503s naming GrokBot. The bearer token, if
+    configured, is sent and never logged."""
+
+    url: str
+    bearer: str = ""
+    timeout: int = DRAFT_TIMEOUT_SECONDS
+    image_timeout: int = IMAGE_TIMEOUT_SECONDS
+    name: str = "grokbot"
+
+    def _text(self, task: str, prompt: str) -> str:
+        payload = post_json(
+            self.url,
+            {"task": task, "prompt": prompt},
+            bearer=self.bearer,
+            timeout=self.timeout,
+            what="GrokBot",
+        )
+        return _require_text(payload, "GrokBot")
+
+    def complete(self, prompt: str) -> str:
+        return self._text(GROKBOT_TASK_ASK, prompt)
+
+    def polish(self, transcript: str) -> str:
+        # Same constrained framing every other adapter gets — GrokBot's LLM
+        # cleans the transcript up and does nothing else — plus the explicit
+        # task so the GrokBot side can select its no-tools path.
+        return self._text(GROKBOT_TASK_CLEANUP, POLISH_FRAMING.format(transcript=transcript))
+
+
+@dataclass
+class GrokBotImagingAgent(GrokBotAgent):
+    """GrokBot with its image capability enabled.
+
+        request   {"task": "imagine", "prompt", "aspect_ratio", "quality"}
+        response  {"image_base64": "<base64 PNG>"}  (HTTP 200)
+
+    Defining `generate` is what makes capability routing send Imagine to
+    the agent (see `agent_supports_imagine`), so this class exists only
+    when the operator opted in with `CARET_GROKBOT_IMAGE=on`. With images
+    off, `GrokBotAgent` has no `generate` and Imagine reports honestly off
+    unless a separate image provider is configured."""
+
+    def generate(self, prompt: str, *, aspect_ratio: str, quality: str) -> bytes:
+        payload = post_json(
+            self.url,
+            {
+                "task": GROKBOT_TASK_IMAGINE,
+                "prompt": prompt,
+                "aspect_ratio": aspect_ratio,
+                "quality": quality,
+            },
+            bearer=self.bearer,
+            timeout=self.image_timeout,
+            what="GrokBot",
+        )
+        encoded = payload.get("image_base64")
+        if not isinstance(encoded, str) or not encoded.strip():
             raise CaretError(
-                503, "internal_error", f"upstream agent answered HTTP {exc.code}", retryable=True
-            ) from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise CaretError(
-                503, "internal_error", "upstream agent unreachable", retryable=True
-            ) from exc
-        try:
-            payload = json.loads(raw)
-        except ValueError as exc:
-            raise CaretError(
-                503, "internal_error", "upstream agent returned invalid JSON", retryable=True
-            ) from exc
-        text = payload.get("text") if isinstance(payload, dict) else None
-        if not isinstance(text, str) or not text.strip():
-            raise CaretError(
-                503, "internal_error", 'upstream agent response has no "text"', retryable=True
+                503, "internal_error", 'GrokBot response has no "image_base64"', retryable=True
             )
-        return text.strip()
+        try:
+            image = base64.b64decode(encoded, validate=True)
+        except ValueError as exc:  # binascii.Error subclasses ValueError
+            raise CaretError(
+                503, "internal_error", "GrokBot returned invalid base64", retryable=True
+            ) from exc
+        if not image.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise CaretError(
+                503, "internal_error", "GrokBot returned a non-PNG image", retryable=True
+            )
+        return image
+
+
+@dataclass
+class NullAgent:
+    """No Ask adapter configured.
+
+    Ask is optional in caret/v1, so "no agent" is a legitimate, honest
+    configuration — a dictation-only backend. What is not legitimate is
+    pretending: this agent never answers, the backend reports
+    `draft: false`, and `/v1/draft` is a 404. Anything that reaches these
+    methods anyway is a bug in the caller, and says so."""
+
+    name: str = "off"
+
+    def _refuse(self) -> CaretError:
+        return CaretError(
+            404,
+            "not_found",
+            "this backend has no agent configured: Ask is off. Set CARET_AGENT "
+            "to the runtime you run — see https://docs.typewithcaret.com/connect/",
+            retryable=False,
+        )
+
+    def complete(self, prompt: str) -> str:
+        raise self._refuse()
+
+    def draft(self, *, instruction: str, visible_text: str | None, app_hint: str | None) -> str:
+        raise self._refuse()
+
+    def polish(self, transcript: str) -> str:
+        raise self._refuse()
 
 
 @dataclass
 class EchoAgent:
-    """Deterministic stand-in — makes conformance checks free and hermetic."""
+    """Deterministic stand-in — makes conformance checks free and hermetic.
+
+    Selectable only by asking for it (`CARET_AGENT=echo`). `auto` will
+    never fall back to it: a stand-in that answers like a working agent is
+    the one failure mode this backend refuses to ship. `auto` with nothing
+    installed resolves to `NullAgent` and says Ask is off."""
 
     name: str = "echo"
 
@@ -614,6 +831,33 @@ def agent_from_env(env: dict[str, str] | None = None) -> object:
         )
     if preset == "echo":
         return EchoAgent()
+    if preset in ("off", "none"):
+        return NullAgent()
+    if preset == "grokbot":
+        url = env.get("CARET_GROKBOT_URL", "")
+        if not url:
+            raise _config_error(
+                "CARET_AGENT=grokbot requires CARET_GROKBOT_URL (the endpoint "
+                "your GrokBot deployment exposes to the backend it hosts) — "
+                "see https://docs.typewithcaret.com/connect/grokbot/"
+            )
+        if urlparse(url).scheme not in ("http", "https"):
+            raise _config_error(
+                f"CARET_GROKBOT_URL must be http:// or https://, got {url!r}"
+            )
+        images = env.get("CARET_GROKBOT_IMAGE", "off").strip().lower()
+        if images not in ("on", "off"):
+            raise _config_error(
+                f"CARET_GROKBOT_IMAGE must be 'on' or 'off', got {images!r}: "
+                "set it 'on' only if this GrokBot deployment actually serves "
+                "the imagine task, so Imagine is not advertised falsely"
+            )
+        factory = GrokBotImagingAgent if images == "on" else GrokBotAgent
+        return factory(
+            url=url,
+            bearer=env.get("CARET_GROKBOT_BEARER", ""),
+            timeout=timeout,
+        )
     if preset == "custom-http":
         url = env.get("CARET_AGENT_HTTP_URL", "")
         if not url:
@@ -648,11 +892,15 @@ def agent_from_env(env: dict[str, str] | None = None) -> object:
                 return CommandAgent(
                     name=candidate, template=AGENT_PRESETS[candidate], timeout=timeout
                 )
-        return EchoAgent()
+        # Nothing installed: Ask is off, and the backend says so. Falling
+        # back to EchoAgent here would produce a backend that looks healthy
+        # and answers every draft with a stand-in — the operator would find
+        # out from their phone, not from health.
+        return NullAgent()
     raise _config_error(
         f"unknown CARET_AGENT: {preset!r}; one of: auto, "
         + ", ".join(sorted(AGENT_PRESETS))
-        + ", openclaw, custom-http, echo"
+        + ", grokbot, openclaw, custom-http, echo, off"
     )
 
 
@@ -661,22 +909,32 @@ def agent_from_env(env: dict[str, str] | None = None) -> object:
 # Every surface routes through the selected agent when — and only when —
 # that agent adapter verifiably provides the capability:
 #
-#   Ask        always the agent. That is what an agent adapter is.
-#   Cleanup    always the agent, as a constrained text-only cleanup request
+#   Ask        the agent, when there is one. Ask is OPTIONAL in caret/v1:
+#              `CARET_AGENT=off` (or `auto` with nothing installed) is a
+#              valid dictation-only backend that reports `draft: false`
+#              and answers /v1/draft with 404 rather than faking it.
+#   Cleanup    the agent, as a constrained text-only cleanup request
 #              (POLISH_FRAMING): fix the transcript, take no action. The
 #              CLI presets run in their read-only modes, so "no action
-#              tools" is enforced where the runtime can enforce it.
+#              tools" is enforced where the runtime can enforce it. With
+#              no agent, cleanup is off and dictation returns the raw
+#              transcript — still a complete, valid backend.
 #   STT        the agent only if its adapter implements `transcribe()`.
 #              NONE of the shipped presets does: no documented, stable
 #              non-interactive audio-transcription interface could be
-#              verified for Hermes, OpenClaw, Claude Code, Codex, or the
-#              custom-http contract (which is text-JSON by definition).
-#              So STT falls back to the local OpenWhisper preset by
-#              default, or to the adapter you configure.
+#              verified for Hermes, OpenClaw, Claude Code, Codex, GrokBot,
+#              or the custom-http contract (which is text-JSON by
+#              definition). So STT resolves to the local OpenWhisper
+#              preset by default, or to the adapter you configure — and it
+#              is MANDATORY: dictation is the one surface every valid
+#              Caret backend must serve, so a backend with no working STT
+#              adapter is not ready and reports itself that way.
 #   Imagine    the agent only if its adapter implements `generate()`.
-#              Same finding: none of the shipped presets has a verified
+#              One shipped preset can: `grokbot` with
+#              `CARET_GROKBOT_IMAGE=on` serves Imagine from GrokBot's own
+#              image capability. Every other preset has no verified
 #              image-output interface, so Imagine uses the image adapter
-#              you configure, or stays honestly off.
+#              you configure, or stays honestly off. Imagine is OPTIONAL.
 #
 # An operator integrating an agent that genuinely transcribes audio or
 # renders images gives its adapter a `transcribe(pcm, *, sample_rate)` /
@@ -697,8 +955,15 @@ def transcriber_from_env(
 ) -> object:
     """Pick the STT adapter. Explicit configuration always wins; `auto`
     routes through the agent when it verifiably transcribes, then falls
-    back to local OpenWhisper when its executable is present, and to
-    honestly-off otherwise."""
+    back to local OpenWhisper when its executable is present.
+
+    Dictation is mandatory in caret/v1, so `auto` finding nothing is not a
+    working configuration — it returns `NullTranscriber`, which the server
+    reports as a `not_ready` backend with a `no_stt_adapter` blocker, and
+    which `--check` exits non-zero on. This function does not raise for it:
+    the operator gets a running backend that tells them exactly what is
+    missing, rather than a stack trace. `CARET_STT=off` is the same state,
+    chosen deliberately — still not ready, still says so."""
     env = os.environ if env is None else env
     command = env.get("CARET_STT_COMMAND")
     if command:
@@ -763,7 +1028,8 @@ def image_generator_from_env(
         return FakeImageGenerator()
     if agent is not None and agent_supports_imagine(agent):
         # Capability routing: an agent adapter that verifiably renders
-        # images serves Imagine itself. None of the shipped presets does.
+        # images serves Imagine itself. Of the shipped presets, only
+        # `grokbot` with CARET_GROKBOT_IMAGE=on does.
         return agent
     # Imagine is a capability extension: unconfigured means the surface
     # reports itself off and answers 404, not a fake success.

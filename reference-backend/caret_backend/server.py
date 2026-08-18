@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import adapters
+from . import adapters, pairing
 from .errors import (
     CaretError,
     bad_request,
@@ -42,7 +42,7 @@ log = logging.getLogger("caret")
 
 CONTRACT = "caret/v1"
 SERVICE = "caret-reference-backend"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 CHUNK_MAX_BYTES = 524_288
 CHUNK_TARGET_DURATION_MS = 3_000
@@ -56,6 +56,12 @@ RETRY_AFTER_SECONDS = 3
 ASPECT_RATIOS = ("square", "landscape", "portrait")
 QUALITIES = ("fast", "standard", "best")
 
+# Literal placeholders used in the public setup snippets. Refused as API
+# keys so a half-followed runbook fails at startup rather than in the wild.
+PLACEHOLDER_API_KEYS = frozenset(
+    {"paste-the-key-here", "your-api-key", "changeme", "replace-me"}
+)
+
 # Sample rate is fixed by the contract; every duration here derives from it.
 SAMPLE_RATE_HZ = 16_000
 
@@ -64,6 +70,12 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
         "+00:00", "Z"
     )
+
+
+def _iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, timezone.utc).replace(
+        microsecond=0
+    ).isoformat().replace("+00:00", "Z")
 
 
 def _sha256_hex(data: bytes) -> str:
@@ -120,6 +132,7 @@ class Backend:
         image_generator=None,
         api_keys: tuple[str, ...] = (),
         polish_enabled: bool = True,
+        pairing_enabled: bool = True,
         rate_limit_per_minute: int = 120,
         run_jobs_inline: bool = False,
     ) -> None:
@@ -129,7 +142,13 @@ class Backend:
         self.image_generator = image_generator
         self.api_keys = tuple(api_keys)
         self.polish_enabled = polish_enabled
+        self.pairing_enabled = pairing_enabled
+        self.pairing = pairing.PairingRegistry()
         self.limiter = RateLimiter(rate_limit_per_minute)
+        # /v1/pairing/claim is the one anonymous write on the contract, so
+        # it gets its own budget rather than sharing the per-key one it
+        # cannot use.
+        self.claim_limiter = RateLimiter(30)
         # Tests run jobs synchronously so a poll loop is not needed to
         # observe a terminal result; production always uses a thread.
         self.run_jobs_inline = run_jobs_inline
@@ -141,18 +160,67 @@ class Backend:
         return not isinstance(self.transcriber, adapters.NullTranscriber)
 
     @property
+    def ask_available(self) -> bool:
+        """Ask is optional. No agent configured is a valid dictation-only
+        backend — it just has to say so instead of answering with a
+        stand-in."""
+        return not isinstance(self.agent, adapters.NullAgent)
+
+    @property
+    def cleanup_available(self) -> bool:
+        """Transcript cleanup is the agent doing constrained text work, so
+        it needs an agent. Without one, dictation returns the raw
+        transcript — still complete, still valid."""
+        return self.polish_enabled and self.ask_available
+
+    @property
     def imagine_available(self) -> bool:
         return self.image_generator is not None
 
+    def readiness(self) -> dict:
+        """Is this a valid, usable Caret backend?
+
+        Dictation is MANDATORY in caret/v1: a backend that cannot take
+        speech is not a Caret backend, whatever else it serves. Ask and
+        Imagine are optional and their absence is reported, not fatal.
+        Missing API keys are also blocking — a backend nobody can
+        authenticate to is not usable either.
+
+        Blockers are machine-readable codes so the runbooks, `--check` and
+        the pairing flow can all key off the same list instead of parsing
+        prose."""
+        blockers = []
+        if not self.dictation_available:
+            blockers.append(
+                {
+                    "code": "no_stt_adapter",
+                    "message": "dictation is mandatory and no STT adapter is "
+                    "configured: install OpenWhisper (`brew install "
+                    "openai-whisper`) or set CARET_STT_COMMAND / "
+                    "CARET_STT_HTTP_URL",
+                }
+            )
+        if not self.api_keys:
+            blockers.append(
+                {
+                    "code": "no_api_keys",
+                    "message": "no API keys configured: set CARET_API_KEYS to a "
+                    "key generated with a CSPRNG",
+                }
+            )
+        return {"ready": not blockers, "blockers": blockers}
+
     def capabilities(self) -> dict:
         text_modes = ["text"] + (["audio"] if self.dictation_available else [])
-        modes = {"draft": text_modes}
+        modes = {}
+        if self.ask_available:
+            modes["draft"] = text_modes
         if self.imagine_available:
             modes["imagine"] = text_modes
         if self.dictation_available:
             modes["dictation"] = ["audio"]
         return {
-            "draft": True,
+            "draft": self.ask_available,
             "dictation": self.dictation_available,
             "imagine": self.imagine_available,
             "input_modes": modes,
@@ -180,20 +248,35 @@ class Backend:
     def health(self, auth_header: str | None, request_id: str) -> dict:
         presented = bool(auth_header)
         valid = self.authenticate(auth_header) if presented else None
+        readiness = self.readiness()
+        # Three states, and the difference matters to whoever is reading:
+        #   ok         — a valid backend: dictation works and keys exist.
+        #   degraded   — usable-but-incomplete. Reserved for the keys-only
+        #                gap, which is what a half-finished setup looks
+        #                like.
+        #   not_ready  — dictation is off, so this is not a Caret backend
+        #                at all. Never dress that up as ok.
+        if not self.dictation_available:
+            status = "not_ready"
+        elif not self.api_keys:
+            status = "degraded"
+        else:
+            status = "ok"
         return {
-            "status": "ok" if self.api_keys else "degraded",
+            "status": status,
             "service": SERVICE,
             "contract": CONTRACT,
             "version": VERSION,
             "time": _now_iso(),
             "auth": {"presented": presented, "valid": valid},
             "capabilities": self.capabilities(),
+            "readiness": readiness,
             # Extension blocks (clients ignore unknown fields): which
             # adapters this backend resolved to, and how each surface is
             # routed — truthfully, per the capability-routing rules in
             # adapters.py. `--check` and the runbooks read these.
             "adapters": {
-                "agent": getattr(self.agent, "name", "?"),
+                "agent": getattr(self.agent, "name", "?") if self.ask_available else "none",
                 "stt": getattr(self.transcriber, "name", "none")
                 if self.dictation_available
                 else "none",
@@ -210,10 +293,14 @@ class Backend:
         or hosted adapter, or off. Never a hopeful answer."""
         agent_name = getattr(self.agent, "name", "?")
         routes = {
-            "ask": {"route": "agent", "provider": agent_name},
+            "ask": (
+                {"route": "agent", "provider": agent_name}
+                if self.ask_available
+                else {"route": "off"}
+            ),
             "cleanup": (
                 {"route": "agent", "provider": agent_name, "constrained": True}
-                if self.polish_enabled
+                if self.cleanup_available
                 else {"route": "off"}
             ),
         }
@@ -236,7 +323,130 @@ class Backend:
                 "route": "local",
                 "provider": getattr(self.image_generator, "name", "?"),
             }
+        routes["pairing"] = (
+            {"route": "token", "single_use": True, "carries_api_key": False}
+            if self.pairing_enabled
+            else {"route": "off"}
+        )
         return routes
+
+    # -------------------------------------------------------------- pairing
+
+    def _require_pairing(self) -> None:
+        if not self.pairing_enabled:
+            raise CaretError(
+                404,
+                "pairing_disabled",
+                "pairing is turned off on this backend (CARET_PAIRING=off): "
+                "hand the base URL and API key over by hand",
+            )
+
+    def mint_pairing_token(self, payload: dict, api_key: str, request_id: str) -> dict:
+        """Mint a short-lived, single-use token for one device.
+
+        `api_key` is the key the caller authenticated with, and it is the
+        key this token will hand over. That binding is the point: an
+        operator who wants a device to get its own key authenticates the
+        mint with that key, and pairing delivers exactly it — no key the
+        caller does not already hold can be handed out."""
+        self._require_pairing()
+        readiness = self.readiness()
+        if not readiness["ready"]:
+            # Pairing a phone to a backend that cannot take dictation would
+            # hand the user a keyboard with the microphone missing and
+            # nothing to explain it. Refuse, and say what is missing.
+            blockers = ", ".join(b["code"] for b in readiness["blockers"])
+            raise CaretError(
+                409,
+                "backend_not_ready",
+                f"refusing to pair: this is not a ready Caret backend yet "
+                f"({blockers}). See the readiness block in /v1/health.",
+            )
+        server_url = payload.get("server_url")
+        if not isinstance(server_url, str) or not server_url.strip():
+            raise bad_request(
+                "server_url is required: the https:// base URL the phone will "
+                "use, which the token is bound to"
+            )
+        ttl = payload.get("ttl_seconds", pairing.DEFAULT_TTL_SECONDS)
+        if not isinstance(ttl, int) or isinstance(ttl, bool):
+            raise bad_request("ttl_seconds must be an integer number of seconds")
+        token, record = self.pairing.mint(
+            server_url=server_url, api_key=api_key, ttl_seconds=ttl
+        )
+        return {
+            "token_id": record.token_id,
+            "pairing_token": token,
+            "server_url": record.server_url,
+            # What the QR encodes. Rendering is the caller's job — the
+            # backend does not assume the operator is looking at a terminal.
+            "payload": record.payload(token),
+            "expires_at": _iso(record.expires_at),
+            "expires_in_seconds": int(record.expires_at - record.created_at),
+            "single_use": True,
+            "request_id": request_id,
+        }
+
+    def claim_pairing_token(self, payload: dict, request_id: str) -> dict:
+        """Exchange a pairing token for the durable API key.
+
+        Anonymous by necessity — the client has no key yet; that is what it
+        is here for. The token is the credential, it is consumed on the way
+        through, and the response is the only place the API key appears."""
+        self._require_pairing()
+        token = payload.get("pairing_token")
+        if not isinstance(token, str) or not token.strip():
+            raise bad_request("pairing_token is required")
+        server_url = payload.get("server_url")
+        if not isinstance(server_url, str) or not server_url.strip():
+            raise bad_request(
+                "server_url is required: send back the URL you scanned, so a "
+                "token cannot be replayed against a different server"
+            )
+        device_name = _optional_string(payload, "device_name", 120)
+        record = self.pairing.claim(token.strip(), server_url=server_url)
+        log.info(
+            "pairing token %s claimed by %s",
+            record.token_id,
+            device_name or "an unnamed device",
+        )
+        return {
+            "api_key": record.api_key,
+            "server_url": record.server_url,
+            "contract": CONTRACT,
+            "service": SERVICE,
+            "version": VERSION,
+            "capabilities": self.capabilities(),
+            "readiness": self.readiness(),
+            "token_id": record.token_id,
+            "request_id": request_id,
+        }
+
+    def list_pairing_tokens(self, request_id: str) -> dict:
+        self._require_pairing()
+        return {"tokens": self.pairing.list(), "request_id": request_id}
+
+    def revoke_pairing_token(self, payload: dict, request_id: str) -> dict:
+        """Revoke one token, or every pending one. Neither touches the API
+        key — that is the whole advantage of pairing tokens over putting the
+        key in the QR."""
+        self._require_pairing()
+        if payload.get("all") is True:
+            return {
+                "revoked": self.pairing.revoke_all(),
+                "scope": "all",
+                "request_id": request_id,
+            }
+        token_id = payload.get("token_id")
+        if not isinstance(token_id, str) or not token_id.strip():
+            raise bad_request('provide token_id, or {"all": true}')
+        record = self.pairing.revoke(token_id.strip())
+        return {
+            "revoked": 1,
+            "scope": "one",
+            "token": record.public(time.time()),
+            "request_id": request_id,
+        }
 
     # ---------------------------------------------------------- input model
 
@@ -510,7 +720,7 @@ class Backend:
         text = self.transcriber.transcribe(pcm, sample_rate=meta["sample_rate_hz"])
         if not text.strip():
             raise CaretError(422, "no_speech_detected", "no speech in the recording")
-        if audio["polish"] and self.polish_enabled:
+        if audio["polish"] and self.cleanup_available:
             try:
                 text = self.agent.polish(text)
             except CaretError as exc:
@@ -542,6 +752,15 @@ class Backend:
     # ---------------------------------------------------------------- draft
 
     def draft(self, payload: dict, request_id: str) -> dict:
+        if not self.ask_available:
+            # Ask is optional, and `capabilities.draft: false` already told
+            # the client so. A backend with no agent answers 404 rather
+            # than echoing something back that reads like a draft.
+            raise CaretError(
+                404,
+                "not_found",
+                "this backend has no agent configured: ask is off",
+            )
         client_request_id = _client_request_id(payload)
         input_type, value = self.parse_input(
             payload, alias="instruction", alias_code="instruction_invalid"
@@ -812,8 +1031,25 @@ class Handler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/v1/health":
             return 200, backend.health(auth_header, request_id), {}
 
+        # The one anonymous write on the contract: a client claiming a
+        # pairing token has no API key yet — obtaining one is the point. It
+        # is rate-limited on its own budget rather than left unbounded.
+        if method == "POST" and path == "/v1/pairing/claim":
+            backend.claim_limiter.check("pairing-claim")
+            return 200, backend.claim_pairing_token(self._json_body(), request_id), {}
+
         key = backend.require_auth(auth_header)
         backend.limiter.check(key)
+
+        if path == "/v1/pairing/tokens":
+            if method == "POST":
+                return 200, backend.mint_pairing_token(
+                    self._json_body(), key, request_id
+                ), {}
+            if method == "GET":
+                return 200, backend.list_pairing_tokens(request_id), {}
+        if method == "POST" and path == "/v1/pairing/revoke":
+            return 200, backend.revoke_pairing_token(self._json_body(), request_id), {}
 
         if method == "POST" and path == "/v1/draft":
             return self._async_aware(backend.draft(self._json_body(), request_id))
@@ -864,6 +1100,21 @@ def backend_from_env(env: dict[str, str] | None = None) -> Backend:
     env = os.environ if env is None else env
     data_dir = Path(env.get("CARET_DATA_DIR", Path.home() / ".caret-reference" / "data"))
     keys = tuple(k.strip() for k in env.get("CARET_API_KEYS", "").split(",") if k.strip())
+    # The setup snippets use an obvious placeholder on the export line so the
+    # generator stays on its own line and no scrubber can mangle it. A reader
+    # who pastes the snippet and forgets to substitute must not end up with a
+    # publicly-guessable key, so the placeholder is refused outright.
+    placeholders = {k for k in keys if k in PLACEHOLDER_API_KEYS}
+    if placeholders:
+        raise CaretError(
+            500,
+            "internal_error",
+            f"CARET_API_KEYS still contains the setup placeholder "
+            f"{sorted(placeholders)[0]!r}: run "
+            "`python3 -c 'import secrets;print(secrets.token_urlsafe(32))'` "
+            "and export the value it prints",
+            retryable=False,
+        )
     if not keys:
         log.warning(
             "CARET_API_KEYS is empty: every authenticated request will return 401 "
@@ -882,6 +1133,7 @@ def backend_from_env(env: dict[str, str] | None = None) -> Backend:
         image_generator=adapters.image_generator_from_env(env, agent=agent),
         api_keys=keys,
         polish_enabled=env.get("CARET_POLISH", "on") != "off",
+        pairing_enabled=env.get("CARET_PAIRING", "on") != "off",
         rate_limit_per_minute=int(env.get("CARET_RATE_LIMIT_PER_MINUTE", "120")),
     )
 

@@ -11,4 +11,4 @@ Run it with `python -m caret_backend`.
 from .server import Backend, backend_from_env, make_server
 
 __all__ = ["Backend", "backend_from_env", "make_server"]
-__version__ = "1.1.0"
+__version__ = "1.2.0"

@@ -37,14 +37,22 @@ through it:
 git clone https://github.com/kballenegger/caret-docs.git
 cd caret-docs/reference-backend
 
-export CARET_AGENT=claude-code              # hermes | codex | openclaw | custom-http
-export CARET_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+export CARET_AGENT=claude-code              # hermes | codex | grokbot | openclaw | custom-http
+python3 -c 'import secrets;print(secrets.token_urlsafe(32))'  # generate a key — copy the output
+export CARET_API_KEYS=paste-the-key-here                      # the same key goes into the Caret app
 python3 -m caret_backend --check
 python3 -m caret_backend --port 8787
 ```
 
 Put TLS in front (a tailnet or a reverse proxy — Caret requires
-`https://`), paste the URL and key into the app, done. The runbooks at
+`https://`), then hand the phone a `caret-connect:v1` code instead of a
+43-character key:
+
+```sh
+python3 -m caret_backend --qr --url https://your-host
+```
+
+Or paste the URL and key into the app by hand. Either way, done. The runbooks at
 <https://docs.typewithcaret.com/connect/> cover each runtime on a local
 Mac and on a VPS/hosted box, with honest compatibility labels.
 
@@ -57,15 +65,22 @@ plugin instead (`claude plugin marketplace add kballenegger/caret-docs`),
 and Hermes users the packaged skill — see
 [`integrations/`](integrations/).
 
-**Capabilities are routed, not assumed.** Your agent answers Ask and
-cleans up transcripts (as a constrained text-only request). Speech is a
-separate lane: no agent runtime has a verified transcription interface,
-so dictation uses local [OpenWhisper](https://github.com/openai/whisper)
-by default when installed — audio never leaves the machine — or the
-STT adapter you configure (`CARET_STT_HTTP_URL`, `CARET_STT_COMMAND`),
-and reports honestly off otherwise. Imagine uses the image provider you
-configure, or stays off. `GET /v1/health` reports the resolved route per
-surface.
+**Capabilities are routed, not assumed.** Speech is its own lane: no
+agent runtime has a verified transcription interface, so dictation uses
+local [OpenWhisper](https://github.com/openai/whisper) by default when
+installed — audio never leaves the machine — or the STT adapter you
+configure (`CARET_STT_HTTP_URL`, `CARET_STT_COMMAND`). Only then does
+text reach your agent, which answers Ask and cleans up transcripts (as a
+constrained text-only request). Imagine uses the image provider you
+configure — or GrokBot's own, with `CARET_GROKBOT_IMAGE=on` — and stays
+off otherwise. `GET /v1/health` reports the resolved route per surface.
+
+**Dictation is the one capability that is not optional.** A valid
+`caret/v1` backend takes speech and advertises `"dictation": true`. With
+no STT adapter resolved, `--check` fails and health reports
+`"status": "not_ready"` with a `no_stt_adapter` blocker rather than
+presenting itself as a working backend. Ask and Imagine stay optional and
+are reported honestly off.
 
 ## The advanced path: implement caret/v1 yourself
 
@@ -83,21 +98,22 @@ python3 reference-backend/conformance.py --base-url https://your-host --api-key 
 
 ## What the contract asks of you
 
-Six endpoints. Only the first two are required.
+Six endpoints. Health and the three dictation endpoints are required.
 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /v1/health` | Say who you are and what you can do |
-| `POST /v1/draft` | Ask — write or rewrite text |
-| `POST /v1/imagine` | Generate an image (optional) |
-| `POST /v1/dictation/sessions` | Open an audio session (optional) |
+| `POST /v1/dictation/sessions` | Open an audio session |
 | `PUT /v1/dictation/sessions/{id}/chunks/{seq}` | Upload audio as it is spoken |
 | `POST /v1/dictation/sessions/{id}/transcript` | Finish and transcribe |
+| `POST /v1/draft` | Ask — write or rewrite text (optional) |
+| `POST /v1/imagine` | Generate an image (optional) |
 
-`capabilities` in your health response decides what the keyboard shows. A
-text-only backend is a legitimate, complete backend; declare
-`{"draft": true, "dictation": false, "imagine": false}` and Caret hides
-the rest.
+`capabilities` in your health response decides what the keyboard shows,
+and it must be true. Dictation is required: declare
+`{"draft": false, "dictation": true, "imagine": false}` and you have a
+legitimate, complete backend. Declare `"dictation": false` and you do
+not have a Caret backend — say `"status": "not_ready"` instead.
 
 ## Checking a change to this repository
 
