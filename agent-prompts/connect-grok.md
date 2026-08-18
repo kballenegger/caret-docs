@@ -37,10 +37,15 @@ includes API access. Store supplied keys securely; never commit or log them.
 - **Cleanup:** Send the transcript to Grok with the reference backend's
   cleanup system prompt. Keep this request short and text-only.
 - **Ask:** Create or configure the user's Grok bot through supported Grok
-  tools. Send completed Ask turns there as a record, but keep recording
-  asynchronous: the keyboard must return its answer without waiting for it.
-  A recording failure must not fail or slow an Ask.
+  tools. Send completed Ask turns there as a record through a durable queue.
+  Run a 24/7 poll worker that drains pending turns and retries failures.
+  Keep it asynchronous: the keyboard must return its answer without waiting
+  for the queue or Grok. A queue or recording failure must not fail or slow
+  an Ask.
 - **Imagine:** Connect Grok Imagine and test a real image request.
+
+Run the backend and poll worker as supervised 24/7 services. Configure
+restart-on-failure and verify both recover after a restart.
 
 Use the reference backend's GrokBot interface exactly. Do not claim a
 capability is enabled until its endpoint has been tested.
@@ -53,6 +58,9 @@ Run the backend check. Then verify from the phone:
 - requests without the Caret API key get `401`;
 - Ask, cleanup, dictation, and Imagine work only when configured;
 - the resolved `routes` in `/v1/health` match the live setup;
-- Ask returns quickly even if Grok bot recording is unavailable.
+- Ask returns quickly even if Grok bot recording is unavailable;
+- a queued Ask reaches the Grok bot after the response is returned;
+- the backend and poll worker restart automatically and remain healthy after
+  a reboot or forced restart.
 
 Give the user the final base URL and Caret API key to enter in the app.
