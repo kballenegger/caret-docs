@@ -1,21 +1,70 @@
-MIT License
+Caret Source-Available License
 
 Copyright (c) 2026 Caret
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+THIS IS A SOURCE-AVAILABLE LICENSE. IT IS NOT AN OPEN SOURCE LICENSE.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Purpose
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+   This repository documents the caret/v1 API and provides reference
+   implementations (including the reference backend and the Caret Agent
+   Bridge) so that users of the Caret client applications ("Caret") can
+   run Caret against a backend they control.
+
+2. License grant
+
+   Subject to the restrictions below, you are granted a non-exclusive,
+   non-transferable, royalty-free license to use, copy, and modify the
+   contents of this repository solely to configure, run, operate, or
+   extend a backend or integration that serves Caret — that is, an
+   implementation of the caret/v1 contract used with the Caret client
+   applications.
+
+3. Restrictions
+
+   Except as expressly permitted in section 2, you may not:
+
+   a. use the contents of this repository, or works derived from them,
+      on a standalone basis or as part of any product or service that
+      does not serve Caret, including any product or service that
+      competes with Caret;
+   b. redistribute, sublicense, sell, rent, lease, or otherwise make
+      the contents of this repository or derived works available to
+      third parties, other than sharing your own backend configuration
+      privately with users of your own Caret integration;
+   c. commercially exploit the contents of this repository outside the
+      scope of section 2;
+   d. use the Caret name, logo, or other trademarks, except to
+      truthfully describe compatibility with Caret; or
+   e. remove or alter copyright, license, or attribution notices.
+
+4. Termination
+
+   This license terminates automatically if you breach it. On
+   termination you must stop using and delete all copies and derived
+   works, except that a backend you operate solely for your own use of
+   Caret may continue under section 2 once the breach is cured.
+
+5. No warranty
+
+   THE CONTENTS OF THIS REPOSITORY ARE PROVIDED "AS IS", WITHOUT
+   WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+   TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+   PURPOSE, TITLE, AND NON-INFRINGEMENT.
+
+6. Limitation of liability
+
+   IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+   CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+   CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION
+   WITH THE CONTENTS OF THIS REPOSITORY OR THEIR USE. TO THE MAXIMUM
+   EXTENT PERMITTED BY LAW, TOTAL AGGREGATE LIABILITY IS LIMITED TO THE
+   AMOUNT YOU PAID FOR THIS REPOSITORY, WHICH IS ZERO.
+
+7. About this license
+
+   This is a product license written to keep the reference material
+   usable by Caret users while it remains Caret's. It has not been
+   negotiated for your situation. If you need rights beyond what it
+   grants — redistribution, commercial arrangements, or anything else —
+   contact Caret via https://typewithcaret.com.

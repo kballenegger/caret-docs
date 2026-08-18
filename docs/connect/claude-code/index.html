@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Connect Claude Code to Caret</title>
-<meta name="description" content="Runbook: put the Caret Agent Bridge in front of the Claude Code CLI — read-only plan mode, no session persistence — on a local Mac or a VPS.">
+<meta name="description" content="Runbook: the Caret reference backend with Claude Code as its Ask adapter — read-only plan mode, no session persistence — on a local Mac or a VPS, with optional local OpenWhisper dictation.">
 <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
 </head>
@@ -26,101 +26,132 @@
   <p class="kicker">connect · claude code</p>
   <h1>Claude Code behind your keyboard.</h1>
   <p class="lead">
-    The bridge runs one <code>claude -p</code> call per draft — print mode,
-    read-only plan mode, nothing persisted — and hands the answer to Caret.
+    The reference backend runs one <code>claude -p</code> call per draft —
+    print mode, read-only plan mode, nothing persisted — and hands the answer
+    to Caret. With OpenWhisper installed, the same backend also takes
+    dictation.
   </p>
 
   <div class="note">
     <strong>Status: tested</strong>
     <p style="margin:0.4rem 0 0">
-      This preset was verified end to end against a real Claude Code install:
-      a live draft came back through the bridge, idempotent replay included.
-      The exact command per draft is
+      This Ask preset was verified end to end against a real Claude Code
+      install: a live draft came back through the backend, idempotent replay
+      included. The exact command per draft is
       <code>claude -p --permission-mode plan --no-session-persistence
       "&lt;prompt&gt;"</code> — every flag is stock, documented CLI syntax.
     </p>
   </div>
 
+  <div class="note">
+    <strong>Plugin install</strong>
+    <p style="margin:0.4rem 0 0">
+      Claude Code has a documented plugin system, so this integration is also
+      packaged as a plugin. Install it and ask Claude Code to
+      "connect Caret" — the plugin's skill runs this runbook for you:
+    </p>
+    <pre style="margin:0.4rem 0 0"><code>claude plugin marketplace add kballenegger/caret-docs
+claude plugin install caret-connect@caret-docs</code></pre>
+  </div>
+
   <h2>What you need</h2>
   <ul>
     <li>The <code>claude</code> CLI installed and signed in on the machine
-        that will run the bridge (<code>claude --version</code> works).</li>
+        that will run the backend (<code>claude --version</code> works).</li>
     <li>Python 3.10+ (preinstalled on macOS and every mainstream Linux).</li>
+    <li>Optionally, <a href="https://github.com/openai/whisper">OpenWhisper</a>
+        (<code>brew install openai-whisper</code>) for local dictation —
+        without it, dictation reports honestly off and everything else
+        works.</li>
     <li>Tailscale on that machine and your iPhone, <em>or</em> a domain
         pointed at your VPS for public HTTPS.</li>
   </ul>
 
-  <h2>1 · Get and configure the bridge</h2>
-  <pre><code>curl -fsSLO https://docs.typewithcaret.com/agent-bridge/caret_agent_bridge.py
+  <h2>1 · Get and configure the backend</h2>
+  <pre><code>git clone https://github.com/kballenegger/caret-docs.git
+cd caret-docs/reference-backend
 
-export CARET_BRIDGE_BACKEND=claude-code
-export CARET_BRIDGE_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
-echo "$CARET_BRIDGE_API_KEYS"               # paste this into Caret later
+export CARET_AGENT=claude-code
+export CARET_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+echo "$CARET_API_KEYS"                        # paste this into Caret later
 
-python3 caret_agent_bridge.py --check
-# config ok: backend=claude-code adapter=cli keys=1 host=127.0.0.1 port=8790 …</code></pre>
+python3 -m caret_backend --check
+# config ok: agent=claude-code stt=openwhisper … (stt=none without OpenWhisper)</code></pre>
   <p>
     Want a specific model, or plan mode is not restrictive enough for your
     taste? Override the command rather than the code — substitution is
     argv-level, never a shell:
   </p>
   <pre><code># pin a fast model for drafting
-export CARET_BRIDGE_COMMAND='claude -p --permission-mode plan --no-session-persistence --model haiku {prompt}'</code></pre>
+export CARET_AGENT_COMMAND='claude -p --permission-mode plan --no-session-persistence --model haiku {prompt}'</code></pre>
   <p>
-    The bridge refuses any command containing a permission-bypass flag
+    The backend refuses any command containing a permission-bypass flag
     (<code>--dangerously-skip-permissions</code> and friends) — that refusal
     is a startup error, by design.
   </p>
 
   <h2>2 · Run it and smoke-test locally</h2>
-  <pre><code>python3 caret_agent_bridge.py --port 8790 &amp;
+  <pre><code>python3 -m caret_backend --port 8787 &amp;
 
-curl -s localhost:8790/v1/health | python3 -m json.tool
-curl -s -X POST localhost:8790/v1/draft \
-  -H "Authorization: Bearer $CARET_BRIDGE_API_KEYS" \
+curl -s localhost:8787/v1/health | python3 -m json.tool
+curl -s -X POST localhost:8787/v1/draft \
+  -H "Authorization: Bearer $CARET_API_KEYS" \
   -H 'Content-Type: application/json' \
   -d '{"client_request_id":"smoke-1",
        "input":{"type":"text","text":"tell Sam I am running ten minutes late"}}'</code></pre>
   <p>
-    First draft takes a few seconds (a full model call). If it fails, the
-    error message carries the CLI's stderr tail — run the
-    <code>claude -p</code> command by hand as the same user to see the whole
-    story.
+    Health's <code>adapters</code> block names what resolved
+    (<code>"agent": "claude-code"</code>, and <code>"stt": "openwhisper"</code>
+    when dictation is on). First draft takes a few seconds (a full model
+    call). If it fails, the error message carries the CLI's stderr tail — run
+    the <code>claude -p</code> command by hand as the same user to see the
+    whole story.
+  </p>
+
+  <h2>Dictation</h2>
+  <p>
+    STT is the backend's own adapter lane — Claude Code plays no part in
+    transcription. With OpenWhisper on PATH, dictation and spoken Ask are on:
+    speech is transcribed locally first, and only the resulting text reaches
+    <code>claude -p</code>. <code>CARET_STT_MODEL</code> picks the model
+    (<code>turbo</code> default). No OpenWhisper, no problem —
+    <code>capabilities</code> reports dictation off and the keyboard hides
+    the microphone. See <a href="/connect/#stt">the STT section of the
+    Connect overview</a> for hosted and custom STT options.
   </p>
 
   <h2>3a · Local Mac</h2>
   <p>
-    Keep the bridge on loopback and let Tailscale provide the private HTTPS
+    Keep the backend on loopback and let Tailscale provide the private HTTPS
     URL:
   </p>
-  <pre><code>tailscale serve --bg 8790
+  <pre><code>tailscale serve --bg 8787
 # https://your-mac.your-tailnet.ts.net  ← this is the URL for Caret</code></pre>
   <p>
     Your iPhone must be on the same tailnet. Nothing is exposed publicly, and
-    the certificate is handled for you. To keep the bridge running across
-    logins, wrap the two <code>export</code>s and the <code>python3</code>
-    invocation in a LaunchAgent or just a <code>tmux</code> session — the
-    bridge is a single foreground process and survives being supervised by
-    anything.
+    the certificate is handled for you. To keep the backend running across
+    logins, wrap the <code>export</code>s and the <code>python3</code>
+    invocation in a LaunchAgent or just a <code>tmux</code> session — it is a
+    single foreground process and survives being supervised by anything.
   </p>
 
   <h2>3b · VPS or hosted box</h2>
   <p>
-    Same bridge, same config, on the box where <code>claude</code> is signed
+    Same backend, same config, on the box where <code>claude</code> is signed
     in. Two transport options:
   </p>
   <p><strong>Tailnet (no open ports):</strong> exactly as on the Mac —
-     <code>tailscale serve --bg 8790</code>.</p>
+     <code>tailscale serve --bg 8787</code>.</p>
   <p><strong>Public HTTPS with Caddy:</strong></p>
   <pre><code># /etc/caddy/Caddyfile
 caret.yourdomain.com {
-    reverse_proxy 127.0.0.1:8790
+    reverse_proxy 127.0.0.1:8787
 }</code></pre>
   <p>
-    Caddy fetches and renews the certificate automatically. The bridge stays
+    Caddy fetches and renews the certificate automatically. The backend stays
     bound to <code>127.0.0.1</code>; only the proxy is reachable, and the
-    bearer key is the lock. Run the bridge as a dedicated low-privilege user
-    (<code>useradd -m caret-bridge</code>, sign <code>claude</code> in as that
+    bearer key is the lock. Run the backend as a dedicated low-privilege user
+    (<code>useradd -m caret</code>, sign <code>claude</code> in as that
     user) so a drafting call can never see more than that account does.
   </p>
 
@@ -130,27 +161,31 @@ caret.yourdomain.com {
         (<code>https://your-mac.your-tailnet.ts.net</code> or
         <code>https://caret.yourdomain.com</code>).</li>
     <li>Paste the API key you generated.</li>
-    <li>The app runs the health check and shows what it found — text-only
-        Ask, no dictation, no Imagine, exactly what this bridge does.</li>
+    <li>The app runs the health check and shows what it found — Ask always,
+        dictation when OpenWhisper resolved, Imagine only if you configured
+        an image command.</li>
   </ol>
 
   <h2>Troubleshooting</h2>
   <table>
     <tr><th>Symptom</th><th>Fix</th></tr>
-    <tr><td><code>configuration error: 'claude' not found on PATH</code></td>
-        <td>The bridge's user cannot see the CLI. Install it for that user, or
-            put its location on PATH in the same environment that launches the
-            bridge.</td></tr>
+    <tr><td><code>503 internal_error: claude-code command not found</code></td>
+        <td>The backend's user cannot see the CLI. Install it for that user,
+            or put its location on PATH in the same environment that launches
+            the backend.</td></tr>
     <tr><td><code>503 internal_error: claude-code exited 1: …</code></td>
-        <td>Usually authentication — run <code>claude -p "say ok"</code> as the
-            bridge's user; sign in if prompted.</td></tr>
+        <td>Usually authentication — run <code>claude -p "say ok"</code> as
+            the backend's user; sign in if prompted.</td></tr>
     <tr><td><code>504 draft_timeout</code></td>
         <td>Model slower than the 90 s budget. Pin a faster model with
-            <code>CARET_BRIDGE_COMMAND</code> (above) or raise
-            <code>CARET_BRIDGE_TIMEOUT_S</code>.</td></tr>
+            <code>CARET_AGENT_COMMAND</code> (above) or raise
+            <code>CARET_AGENT_TIMEOUT_S</code>.</td></tr>
     <tr><td>Health reachable, drafts 401</td>
-        <td>Key in the app ≠ <code>CARET_BRIDGE_API_KEYS</code>. Health's
+        <td>Key in the app ≠ <code>CARET_API_KEYS</code>. Health's
             <code>auth.valid</code> tells you before a draft ever runs.</td></tr>
+    <tr><td>No microphone in the keyboard</td>
+        <td>Dictation is off because no STT resolved. Install OpenWhisper and
+            restart, then check <code>adapters.stt</code> in health.</td></tr>
   </table>
   <p>
     General transport and pairing problems are covered on
@@ -161,6 +196,7 @@ caret.yourdomain.com {
 <footer class="site">
   <div class="wrap">
     <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
     <a href="/connect/">Connect</a>
     <a href="/your-agent/">Your Agent</a>

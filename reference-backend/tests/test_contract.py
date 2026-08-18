@@ -635,7 +635,9 @@ class AdapterTests(unittest.TestCase):
         self.assertIsInstance(adapters.agent_from_env({"CARET_AGENT": "echo"}), adapters.EchoAgent)
         custom = adapters.agent_from_env({"CARET_AGENT_COMMAND": "my-agent {prompt}", "CARET_AGENT": "echo"})
         self.assertIsInstance(custom, adapters.CommandAgent)
-        self.assertIsInstance(adapters.transcriber_from_env({}), adapters.NullTranscriber)
+        self.assertIsInstance(
+            adapters.transcriber_from_env({"CARET_STT": "off"}), adapters.NullTranscriber
+        )
         self.assertIsNone(adapters.image_generator_from_env({}))
 
 

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "caret-connect",
+  "version": "1.0.0",
+  "description": "Deploy the Caret reference backend in front of Claude Code so the Caret iOS keyboard drafts through your own agent.",
+  "author": {
+    "name": "Caret",
+    "email": "docs@typewithcaret.com"
+  },
+  "homepage": "https://docs.typewithcaret.com/connect/claude-code/",
+  "skills": [
+    "./"
+  ]
+}

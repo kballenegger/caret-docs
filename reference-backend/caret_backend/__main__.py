@@ -12,6 +12,7 @@ import logging
 import os
 import sys
 
+from .errors import CaretError
 from .server import backend_from_env, make_server
 
 
@@ -20,6 +21,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default=os.environ.get("CARET_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("CARET_PORT", "8787")))
     parser.add_argument("--log-level", default=os.environ.get("CARET_LOG_LEVEL", "INFO"))
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="validate configuration, print the resolved adapters and "
+        "capabilities, and exit (0 = ok)",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -28,8 +35,32 @@ def main(argv: list[str] | None = None) -> int:
         stream=sys.stderr,
     )
 
-    backend = backend_from_env()
+    try:
+        backend = backend_from_env()
+    except CaretError as exc:
+        # Adapter selection failed — a configuration problem, not a bug.
+        print(f"caret-backend: configuration error: {exc.message}", file=sys.stderr)
+        return 2
     caps = backend.capabilities()
+
+    if args.check:
+        print(
+            "config ok: agent={} stt={} imagine={} keys={} capabilities={}".format(
+                getattr(backend.agent, "name", "?"),
+                getattr(backend.transcriber, "name", "none")
+                if caps["dictation"]
+                else "none",
+                getattr(backend.image_generator, "name", "off") if caps["imagine"] else "off",
+                len(backend.api_keys),
+                caps,
+            )
+        )
+        if not backend.api_keys:
+            print(
+                "warning: CARET_API_KEYS is empty — the backend fails closed "
+                "(401 everywhere, health reports degraded)"
+            )
+        return 0
     server = make_server(backend, args.host, args.port)
     logging.getLogger("caret").info(
         "listening on http://%s:%d  agent=%s stt=%s imagine=%s",

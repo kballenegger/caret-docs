@@ -24,10 +24,18 @@
 
 <main class="wrap">
   <div class="note">
-    <p style="margin:0">point your agent to <a href="/agent-prompts/implement-caret-backend.md">here</a> to implement the caret backend</p>
+    <strong>The advanced path</strong>
+    <p style="margin:0.4rem 0 0">
+      Most people do not need this page: to put the agent you already run
+      behind your keyboard, <a href="/connect/">deploy the reference
+      backend</a> instead. This page is for implementing
+      <code>caret/v1</code> from scratch — point your coding agent at
+      <a href="/agent-prompts/implement-caret-backend.md">the implementation
+      prompt</a> if you want it built for you.
+    </p>
   </div>
 
-  <p class="kicker">caret/v1 · contract 1.1</p>
+  <p class="kicker">caret/v1 · contract 1.1 · advanced</p>
   <h1>Implement the Caret API.</h1>
   <p class="lead">
     Everything the keyboard sends and everything it expects back, in the order
@@ -521,6 +529,7 @@ export CARET_IMAGE_COMMAND='my-image-tool --prompt {prompt} --out {out}'</code><
 <footer class="site">
   <div class="wrap">
     <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
     <a href="/">Overview</a>
     <a href="/openapi.yaml">openapi.yaml</a>

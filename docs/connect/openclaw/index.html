@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Connect OpenClaw to Caret</title>
-<meta name="description" content="Runbook: connect OpenClaw to Caret through the Agent Bridge. Honestly labeled: not yet verified — you supply the command line, and this page shows how to verify it yourself.">
+<meta name="description" content="Runbook: the Caret reference backend with OpenClaw as its Ask adapter — an explicit, operator-verified command line; no unverified defaults — on a local Mac or a VPS.">
 <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
 </head>
@@ -26,24 +26,26 @@
   <p class="kicker">connect · openclaw</p>
   <h1>OpenClaw behind your keyboard.</h1>
   <p class="lead">
-    The bridge has an <code>openclaw</code> switch, but it ships no default
-    command for it — because none could be verified, and a guessed command
-    line published as documentation would be a support claim we cannot back.
+    The reference backend has an <code>openclaw</code> preset, but it ships
+    no default command for it — because none could be verified, and a guessed
+    command line published as documentation would be a support claim we
+    cannot back.
   </p>
 
   <div class="note">
     <strong>Status: not yet verified</strong>
     <p style="margin:0.4rem 0 0">
-      OpenClaw was not available on the machine this bridge was developed and
-      tested on, so no invocation has been checked against a real install.
-      Selecting <code>CARET_BRIDGE_BACKEND=openclaw</code> without an explicit
-      command is a startup error by design. Everything below is the honest
-      path from "unverified" to "works on my machine, verified" — it takes
-      about ten minutes and one model call.
+      OpenClaw was not available on the machine this backend was developed
+      and tested on, so no invocation has been checked against a real
+      install — and no plugin, STT, or image capability is claimed either.
+      Selecting <code>CARET_AGENT=openclaw</code> without an explicit command
+      is a startup error by design. Everything below is the honest path from
+      "unverified" to "works on my machine, verified" — it takes about ten
+      minutes and one model call.
     </p>
   </div>
 
-  <h2>What the bridge needs from OpenClaw</h2>
+  <h2>What the backend needs from OpenClaw</h2>
   <p>
     The same thing it needs from every CLI runtime — one non-interactive
     command that:
@@ -59,20 +61,21 @@
     If your OpenClaw install has a documented one-shot / non-interactive chat
     mode, use it directly. If its output mixes logs with the answer, wrap it
     in a five-line script that extracts the reply and prints only that, and
-    point the bridge at the wrapper. Prefer whatever flags your install
+    point the backend at the wrapper. Prefer whatever flags your install
     documents for running <em>without</em> tools or actions — the drafting
     call should be text-in, text-out.
   </p>
 
   <h2>1 · Configure with an explicit command</h2>
-  <pre><code>curl -fsSLO https://docs.typewithcaret.com/agent-bridge/caret_agent_bridge.py
+  <pre><code>git clone https://github.com/kballenegger/caret-docs.git
+cd caret-docs/reference-backend
 
-export CARET_BRIDGE_BACKEND=openclaw
+export CARET_AGENT=openclaw
 # YOUR verified invocation — this example shape is illustrative, not documentation:
-export CARET_BRIDGE_COMMAND='openclaw-draft-wrapper {prompt}'
-export CARET_BRIDGE_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+export CARET_AGENT_COMMAND='openclaw-draft-wrapper {prompt}'
+export CARET_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
 
-python3 caret_agent_bridge.py --check</code></pre>
+python3 -m caret_backend --check</code></pre>
   <p>
     Substitution is argv-level — no shell ever sees the prompt. Commands
     containing known permission-bypass flags are refused at startup.
@@ -80,13 +83,13 @@ python3 caret_agent_bridge.py --check</code></pre>
 
   <h2>2 · Verify it yourself</h2>
   <p>First the command alone, then the chain:</p>
-  <pre><code># 1. does the command behave? (run as the bridge's user)
+  <pre><code># 1. does the command behave? (run as the backend's user)
 echo ok | openclaw-draft-wrapper "reply with exactly: ok"
 
 # 2. does the chain draft?
-python3 caret_agent_bridge.py --port 8790 &amp;
-curl -s -X POST localhost:8790/v1/draft \
-  -H "Authorization: Bearer $CARET_BRIDGE_API_KEYS" \
+python3 -m caret_backend --port 8787 &amp;
+curl -s -X POST localhost:8787/v1/draft \
+  -H "Authorization: Bearer $CARET_API_KEYS" \
   -H 'Content-Type: application/json' \
   -d '{"client_request_id":"smoke-1",
        "input":{"type":"text","text":"tell Sam I am running ten minutes late"}}'</code></pre>
@@ -99,13 +102,23 @@ curl -s -X POST localhost:8790/v1/draft \
     page's label changes.
   </p>
 
+  <h2>Dictation</h2>
+  <p>
+    STT does not go through OpenClaw — even if your install has voice
+    features, no stable transcription contract could be verified, so nothing
+    is routed through it. Dictation uses the backend's own STT lane: local
+    <a href="https://github.com/openai/whisper">OpenWhisper</a> by default
+    when installed, or the adapter you configure. See
+    <a href="/connect/#stt">the STT section of the Connect overview</a>.
+  </p>
+
   <h2>3 · Host modes</h2>
   <p>
     Identical to every other backend once the command works.
-    <strong>Local Mac:</strong> <code>tailscale serve --bg 8790</code> for a
+    <strong>Local Mac:</strong> <code>tailscale serve --bg 8787</code> for a
     private tailnet HTTPS URL. <strong>VPS / hosted box:</strong> the same
     tailnet command, or public HTTPS via a Caddy site block
-    (<code>reverse_proxy 127.0.0.1:8790</code>) with the bridge kept on
+    (<code>reverse_proxy 127.0.0.1:8787</code>) with the backend kept on
     loopback and run as a dedicated low-privilege user with a minimal
     OpenClaw profile. Details and trade-offs:
     <a href="/connect/#host-modes">the Connect overview</a>.
@@ -113,19 +126,20 @@ curl -s -X POST localhost:8790/v1/draft \
 
   <h2>4 · Pair with Caret</h2>
   <p>
-    URL + key in Caret settings; the health check confirms text-only Ask and
-    shows <code>"backend": "openclaw"</code> in the bridge block.
+    URL + key in Caret settings; the health check shows
+    <code>"agent": "openclaw"</code> in the adapters block and reports what
+    actually resolved per surface in <code>routes</code>.
   </p>
 
   <h2>Troubleshooting</h2>
   <table>
     <tr><th>Symptom</th><th>Fix</th></tr>
-    <tr><td><code>configuration error: the openclaw backend is not yet verified…</code></td>
-        <td>Working as intended — set <code>CARET_BRIDGE_COMMAND</code> to
+    <tr><td><code>configuration error: the openclaw preset is not yet verified…</code></td>
+        <td>Working as intended — set <code>CARET_AGENT_COMMAND</code> to
             your verified invocation.</td></tr>
     <tr><td><code>503 internal_error: openclaw exited N: …</code></td>
         <td>The command failed; its stderr tail is in the message. Re-run it
-            by hand as the bridge's user.</td></tr>
+            by hand as the backend's user.</td></tr>
     <tr><td>Drafts contain log lines or banners</td>
         <td>Your command's stdout is not answer-only — add the quiet flag
             your install documents, or wrap and filter.</td></tr>
@@ -138,6 +152,7 @@ curl -s -X POST localhost:8790/v1/draft \
 <footer class="site">
   <div class="wrap">
     <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
     <a href="/connect/">Connect</a>
     <a href="/your-agent/">Your Agent</a>

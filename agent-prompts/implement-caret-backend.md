@@ -1,4 +1,11 @@
-# Implement a Caret backend
+# Implement a Caret backend (advanced path)
+
+> **Is this the right prompt?** Most users just want the agent they
+> already run behind their keyboard. That is the primary path —
+> [connect-caret.md](https://docs.typewithcaret.com/agent-prompts/connect-caret.md) —
+> which deploys the ready-made reference backend instead of building
+> one. Take *this* prompt only when your user wants a backend they
+> build and fully own.
 
 You are a coding agent. Your job is to stand up a personal `caret/v1`
 backend for your user — the HTTP API that Caret, an agentic iOS keyboard,

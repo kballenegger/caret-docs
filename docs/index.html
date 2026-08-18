@@ -28,35 +28,41 @@
   <p class="lead">
     Caret is a compose surface for iOS: speak or type an intent at the cursor,
     preview, insert a finished message. Everything it does, it does by calling
-    an HTTP API you configure. These pages document that API and nothing else —
-    implement it and the keyboard runs on your agent.
+    an HTTP API you configure. One setup path covers almost everyone: connect
+    the agent you already run.
   </p>
 
   <div class="card">
-    <h3>Implement the Caret API<span class="pill">caret/v1</span></h3>
+    <h3>Connect the agent you already run<span class="pill">start here</span></h3>
     <p>
-      One page with every request and response shape, in the order you would
-      build them: health and capabilities, Ask, spoken input over dictation
-      sessions, Imagine, the error envelope, and the conformance checker that
-      tells you when you are done.
+      Already running Claude Code, Codex, Hermes, or a hosted agent of your
+      own? Deploy the <strong>Caret reference backend</strong> — stdlib
+      Python, canonical in the public
+      <a href="https://github.com/kballenegger/caret-docs">caret-docs</a>
+      repository — pick your agent with one config switch, and it answers
+      Ask while local OpenWhisper takes dictation by default. Validate it,
+      run it on your Mac or your VPS. Per-runtime runbooks, installable
+      plugins where the runtime supports them, and an honest compatibility
+      matrix of what has been tested versus what has not.
     </p>
-    <p><a href="/your-agent/">Read the implementation guide →</a></p>
+    <p><a href="/connect/"><strong>Connect your agent →</strong></a></p>
     <p>
-      Point your agent at <a href="/agent-prompts/implement-caret-backend.md">the
-      agent implementation prompt</a> and it implements the backend for you.
+      Or point your coding agent at
+      <a href="/agent-prompts/connect-caret.md">the connect prompt</a> and it
+      does the download, configuration, validation, and deployment for you.
     </p>
   </div>
 
   <div class="card">
-    <h3>Connect the agent you already run<span class="pill">agent bridge</span></h3>
+    <h3>Advanced: implement the API yourself<span class="pill">caret/v1</span></h3>
     <p>
-      Already running Hermes, Claude Code, Codex, or a hosted agent of your
-      own? The Caret Agent Bridge — one small stdlib-Python server with a
-      config switch — puts a <code>caret/v1</code> front door on it, with
-      per-runtime runbooks for a local Mac and for a VPS, and an honest
-      compatibility matrix of what has been tested versus what has not.
+      Want a backend you fully own — a different language, a different
+      process model, your own providers? Implement the contract from
+      scratch. The implementation guide is one page with every request and
+      response shape; the conformance checker tells you when you are done.
     </p>
-    <p><a href="/connect/">Connect your agent →</a></p>
+    <p><a href="/your-agent/">Read the implementation guide →</a> ·
+       <a href="/agent-prompts/implement-caret-backend.md">agent prompt</a></p>
   </div>
 
   <h2>The three surfaces</h2>
@@ -84,6 +90,12 @@
   <p>
     Only Ask and health are required. A text-only backend is a complete
     backend — say so in <code>capabilities</code> and Caret hides the rest.
+    In the reference backend every surface is <em>capability-routed</em>:
+    your agent answers Ask and cleans up transcripts (as a constrained
+    text-only request); speech is transcribed first — by local OpenWhisper
+    by default, since no agent runtime has a verified transcription
+    interface — and only then does text reach the agent; images come from
+    the provider you configure, or stay honestly off.
   </p>
 
   <h2>One input model</h2>
@@ -125,23 +137,35 @@
 
   <h2>Start in two minutes</h2>
   <p>
-    The reference backend is one Python package with no dependencies. Run it,
-    paste the URL and key into Caret, and your keyboard is live. It is
-    intentionally customizable: every provider is a replaceable seam.
+    Clone the public repository, point the backend at the agent you already
+    run, paste the URL and key into Caret, and your keyboard is live:
   </p>
-  <pre><code>cd reference-backend
+  <pre><code>git clone https://github.com/kballenegger/caret-docs.git
+cd caret-docs/reference-backend
+
+export CARET_AGENT=claude-code              # hermes | codex | openclaw | custom-http
 export CARET_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+python3 -m caret_backend --check
 python3 -m caret_backend --port 8787</code></pre>
   <p>
-    <a href="/your-agent/">The implementation guide</a> covers the rest, and
-    the machine-readable contract is at
+    <a href="/connect/">The Connect guide</a> covers TLS, per-runtime
+    runbooks, dictation via OpenWhisper, and the compatibility matrix. The
+    machine-readable contract is at
     <a href="/openapi.yaml"><code>openapi.yaml</code></a>.
+  </p>
+
+  <p class="note">
+    This documentation and the reference implementations are
+    <strong>source-available, not open source</strong>: licensed for
+    configuring, running, and extending Caret integrations only. See the
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">license</a>.
   </p>
 </main>
 
 <footer class="site">
   <div class="wrap">
     <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
     <a href="/connect/">Connect</a>
     <a href="/your-agent/">Your Agent</a>

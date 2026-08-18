@@ -188,8 +188,55 @@ class Backend:
             "time": _now_iso(),
             "auth": {"presented": presented, "valid": valid},
             "capabilities": self.capabilities(),
+            # Extension blocks (clients ignore unknown fields): which
+            # adapters this backend resolved to, and how each surface is
+            # routed — truthfully, per the capability-routing rules in
+            # adapters.py. `--check` and the runbooks read these.
+            "adapters": {
+                "agent": getattr(self.agent, "name", "?"),
+                "stt": getattr(self.transcriber, "name", "none")
+                if self.dictation_available
+                else "none",
+                "imagine": getattr(self.image_generator, "name", "none")
+                if self.imagine_available
+                else "none",
+            },
+            "routes": self.routes(),
             "request_id": request_id,
         }
+
+    def routes(self) -> dict:
+        """How each surface is served: through the agent, through a local
+        or hosted adapter, or off. Never a hopeful answer."""
+        agent_name = getattr(self.agent, "name", "?")
+        routes = {
+            "ask": {"route": "agent", "provider": agent_name},
+            "cleanup": (
+                {"route": "agent", "provider": agent_name, "constrained": True}
+                if self.polish_enabled
+                else {"route": "off"}
+            ),
+        }
+        if not self.dictation_available:
+            routes["dictation"] = {"route": "off"}
+        elif self.transcriber is self.agent:
+            routes["dictation"] = {"route": "agent", "provider": agent_name}
+        else:
+            kind = "http" if isinstance(self.transcriber, adapters.HttpTranscriber) else "local"
+            routes["dictation"] = {
+                "route": kind,
+                "provider": getattr(self.transcriber, "name", "?"),
+            }
+        if not self.imagine_available:
+            routes["imagine"] = {"route": "off"}
+        elif self.image_generator is self.agent:
+            routes["imagine"] = {"route": "agent", "provider": agent_name}
+        else:
+            routes["imagine"] = {
+                "route": "local",
+                "provider": getattr(self.image_generator, "name", "?"),
+            }
+        return routes
 
     # ---------------------------------------------------------- input model
 
@@ -824,11 +871,15 @@ def backend_from_env(env: dict[str, str] | None = None) -> Backend:
         )
     store = Store(data_dir)
     start_janitor(store)
+    # Capability routing: the agent is resolved first, and the STT and
+    # image resolvers prefer it for their surface when — and only when —
+    # its adapter verifiably provides that capability (see adapters.py).
+    agent = adapters.agent_from_env(env)
     return Backend(
         store=store,
-        agent=adapters.agent_from_env(env),
-        transcriber=adapters.transcriber_from_env(env),
-        image_generator=adapters.image_generator_from_env(env),
+        agent=agent,
+        transcriber=adapters.transcriber_from_env(env, agent=agent),
+        image_generator=adapters.image_generator_from_env(env, agent=agent),
         api_keys=keys,
         polish_enabled=env.get("CARET_POLISH", "on") != "off",
         rate_limit_per_minute=int(env.get("CARET_RATE_LIMIT_PER_MINUTE", "120")),
