@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect your agent — Caret Agent Bridge</title>
+<meta name="description" content="Connect an agent you already run — Hermes, Claude Code, Codex, OpenClaw, or a hosted agent — to the Caret keyboard with one small bridge. Compatibility matrix, security model, pairing, and per-agent runbooks.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <img src="/assets/caret-mark.svg" alt="Caret mark">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/connect/" aria-current="page">Connect</a>
+      <a href="/your-agent/">Your Agent</a>
+      <a href="https://typewithcaret.com">typewithcaret.com</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <p class="kicker">Connect your agent</p>
+  <h1>The agent you already run, behind your keyboard.</h1>
+  <p class="lead">
+    If you already run an agent — on your Mac, on a VPS, or hosted somewhere —
+    the <strong>Caret Agent Bridge</strong> puts a <code>caret/v1</code> front
+    door on it. One small server, one config switch, no third party in the
+    middle of your typing.
+  </p>
+
+  <p>
+    To be precise about what this is: Caret does not integrate with any agent
+    directly. Caret talks to <em>one HTTP contract</em>
+    (<a href="/your-agent/">caret/v1</a>), and the bridge is a reference
+    implementation of that contract's two required surfaces — health and Ask —
+    that forwards each draft to the agent runtime you select. The table below
+    says honestly, per runtime, how far that support has been verified.
+  </p>
+
+  <div class="card">
+    <h3>The bridge in one minute<span class="pill">stdlib python</span></h3>
+    <p>
+      A single Python file, standard library only, about seven hundred lines
+      you can read end to end. Download it, pick a backend, generate a key:
+    </p>
+    <pre><code>curl -fsSLO https://docs.typewithcaret.com/agent-bridge/caret_agent_bridge.py
+
+export CARET_BRIDGE_BACKEND=claude-code     # hermes | codex | openclaw | custom-http
+export CARET_BRIDGE_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+echo "$CARET_BRIDGE_API_KEYS"               # this goes into the Caret app
+
+python3 caret_agent_bridge.py --check       # validate configuration
+python3 caret_agent_bridge.py --port 8790   # run</code></pre>
+    <p>
+      Then put TLS in front (<a href="#host-modes">below</a>) and paste the URL
+      and key into Caret's settings.
+    </p>
+  </div>
+
+  <h2>Compatibility matrix</h2>
+  <p>Three labels, used strictly:</p>
+  <ul>
+    <li><strong>Tested</strong> — the preset was run end to end against a real
+        install of the runtime: a live draft came back through the bridge.</li>
+    <li><strong>Bridge-supported</strong> — the bridge's side of the boundary
+        is fully covered by the hermetic test suite, and the preset uses only
+        the runtime's stock documented syntax — but the suite does not execute
+        the real runtime.</li>
+    <li><strong>Not yet verified</strong> — no stable interface could be
+        checked, so the bridge ships no default and refuses the backend until
+        you configure it explicitly. Not a support claim.</li>
+  </ul>
+  <table>
+    <tr><th>Backend</th><th>Switch</th><th>Default interface</th><th>Status</th></tr>
+    <tr>
+      <td><a href="/connect/claude-code/">Claude Code</a></td>
+      <td><code>claude-code</code></td>
+      <td><code>claude -p</code>, read-only plan mode, no session persistence</td>
+      <td><strong>Tested</strong></td>
+    </tr>
+    <tr>
+      <td><a href="/connect/codex/">Codex</a></td>
+      <td><code>codex</code></td>
+      <td><code>codex exec</code>, read-only sandbox, ephemeral session</td>
+      <td><strong>Tested</strong></td>
+    </tr>
+    <tr>
+      <td><a href="/connect/hermes/">Hermes</a></td>
+      <td><code>hermes</code></td>
+      <td><code>hermes chat -q … -Q</code>, stock non-interactive mode</td>
+      <td><strong>Bridge-supported</strong></td>
+    </tr>
+    <tr>
+      <td><a href="/connect/custom-http/">Custom / hosted (GrokBot path)</a></td>
+      <td><code>custom-http</code></td>
+      <td>one HTTPS <code>POST {"prompt"} → {"text"}</code> per draft</td>
+      <td><strong>Bridge-supported</strong></td>
+    </tr>
+    <tr>
+      <td><a href="/connect/openclaw/">OpenClaw</a></td>
+      <td><code>openclaw</code></td>
+      <td><em>none shipped</em> — you supply the command line</td>
+      <td><strong>Not yet verified</strong></td>
+    </tr>
+  </table>
+  <p>
+    Every runbook covers a local Mac and a VPS / hosted box separately, and
+    repeats its own status label so a page copied out of context stays honest.
+  </p>
+
+  <h2 id="host-modes">Where the bridge runs, and how Caret reaches it</h2>
+  <p>
+    The bridge binds loopback and speaks plain HTTP; the keyboard requires
+    <code>https://</code>. So every deployment is the same shape — bridge on
+    the machine where your agent lives, TLS in front — and the choice is only
+    <em>what provides the TLS</em>.
+  </p>
+  <table>
+    <tr><th>Mode</th><th>How</th><th>Trade-off</th></tr>
+    <tr>
+      <td><strong>Local Mac, tailnet</strong></td>
+      <td><code>tailscale serve --bg 8790</code> gives the bridge a private
+          <code>https://your-mac.your-tailnet.ts.net</code> URL. Your iPhone
+          joins the same tailnet.</td>
+      <td>Recommended default. Nothing is exposed to the public internet; TLS
+          certificates are handled for you; works away from home. Requires
+          Tailscale on phone and Mac.</td>
+    </tr>
+    <tr>
+      <td><strong>Private VPS / hosted box, tailnet</strong></td>
+      <td>Same as above, on the box where your agent runs.</td>
+      <td>Same properties; the box needs no open ports at all.</td>
+    </tr>
+    <tr>
+      <td><strong>VPS, public HTTPS</strong></td>
+      <td>A reverse proxy (Caddy shown in the runbooks) terminates TLS with an
+          automatic Let's Encrypt certificate and forwards to
+          <code>127.0.0.1:8790</code>.</td>
+      <td>Works from any network with no client software — but the endpoint is
+          publicly reachable, so the bearer key and the proxy are your entire
+          perimeter. Use a dedicated subdomain and keep the bridge itself on
+          loopback.</td>
+    </tr>
+  </table>
+  <div class="note">
+    <strong>Not recommended</strong>
+    <p style="margin:0.4rem 0 0">
+      Port-forwarding your home router at the bridge, or binding the bridge to
+      <code>0.0.0.0</code> without a proxy. The bridge fronts an agent with an
+      API key as the only lock; keep it off the open internet unless a proxy
+      and a dedicated host are in front of it.
+    </p>
+  </div>
+
+  <h2>Pairing and the key model</h2>
+  <p>
+    Pairing is deliberately boring: a base URL and a bearer key, both entered
+    once in Caret's settings.
+  </p>
+  <ol>
+    <li><strong>Generate a key on the machine that runs the bridge</strong> —
+        <code>python3 -c 'import secrets;print(secrets.token_urlsafe(32))'</code>.
+        Put it in <code>CARET_BRIDGE_API_KEYS</code>. One key per device makes
+        revocation a matter of deleting one string and restarting.</li>
+    <li><strong>Enter URL and key in Caret.</strong> The app calls
+        <code>GET /v1/health</code> — the only anonymous endpoint — and shows
+        you what it found: <code>auth.valid</code> tells "wrong key" apart
+        from "wrong URL", and <code>capabilities</code> tells the keyboard the
+        bridge is text-only, so it never offers a microphone the bridge cannot
+        serve.</li>
+    <li><strong>Every draft is authenticated</strong> with
+        <code>Authorization: Bearer</code>, compared in constant time. No keys
+        configured means the bridge <em>fails closed</em>: every draft is 401
+        and health reports <code>degraded</code>.</li>
+  </ol>
+
+  <h2>Security model</h2>
+  <p>What the bridge promises, and what stays your responsibility:</p>
+  <ul>
+    <li><strong>Text-only, two endpoints.</strong> The bridge implements
+        health and Ask, declines audio with a contract error, and reports
+        <code>{"dictation": false, "imagine": false}</code>. There is no
+        surface it half-supports.</li>
+    <li><strong>It never widens your agent's permissions.</strong> The CLI
+        presets use each runtime's documented non-interactive,
+        most-restricted mode — Claude Code in read-only plan mode, Codex in a
+        read-only sandbox. The bridge refuses to start if a configured
+        command contains a known permission-bypass flag
+        (<code>--dangerously-skip-permissions</code>,
+        <code>danger-full-access</code>, …). It never enables tool actions,
+        arbitrary shell execution, or background work on the agent's side.</li>
+    <li><strong>A prompt is not a sandbox.</strong> The drafting prompt tells
+        the agent it is writing a draft, not acting — but for runtimes whose
+        restriction flags are advisory (Hermes toolsets follow <em>your</em>
+        profile), the runbook shows the documented way to narrow them, and
+        recommends running the bridge as a dedicated low-privilege user with
+        its own agent profile. That recommendation is the default posture, not
+        an extra.</li>
+    <li><strong>No secret or content logging.</strong> Access logs carry
+        method, path, status, latency and <code>request_id</code> — never
+        instructions, drafts, near-cursor text, or keys. This is asserted by
+        the test suite, not just promised.</li>
+    <li><strong>What your agent sees per draft:</strong> the instruction you
+        typed, up to 4000 characters of text near the cursor
+        (<code>visible_text</code>, often empty), and the host app's bundle id
+        as a register hint. Near-cursor text is someone else's words — the
+        framing treats it as untrusted context, never as a command.</li>
+    <li><strong>Timeouts, not hangs.</strong> Every draft has a wall-clock
+        budget (90 s default); overrun is a clean
+        <code>504 draft_timeout</code>, and a failed draft is never cached —
+        retries can succeed.</li>
+  </ul>
+
+  <h2>Troubleshooting, from the outside in</h2>
+  <table>
+    <tr><th>Symptom</th><th>Meaning</th></tr>
+    <tr><td>Bridge exits immediately with <code>configuration error: …</code></td>
+        <td>The message says exactly which variable to fix.
+            <code>--check</code> reproduces it without serving.</td></tr>
+    <tr><td>Caret says it cannot reach the URL</td>
+        <td>TLS layer. <code>curl https://…/v1/health</code> from the phone's
+            network; if that fails, fix the proxy/tailnet before touching the
+            bridge.</td></tr>
+    <tr><td>Health shows <code>"valid": false</code></td>
+        <td>Key mismatch between the app and
+            <code>CARET_BRIDGE_API_KEYS</code>.</td></tr>
+    <tr><td>Health shows <code>"status": "degraded"</code></td>
+        <td>No keys configured; the bridge is failing closed as designed.</td></tr>
+    <tr><td><code>503 internal_error: … exited N</code></td>
+        <td>The agent CLI failed; the stderr tail is in the message. Run the
+            runbook's smoke command by hand as the bridge's user.</td></tr>
+    <tr><td><code>504 draft_timeout</code></td>
+        <td>The agent is slower than <code>CARET_BRIDGE_TIMEOUT_S</code>. Pin
+            a faster model in the command, or raise the budget.</td></tr>
+  </table>
+  <p>
+    Every response carries a <code>request_id</code>; the bridge logs one line
+    per request with the same id, so a report from the keyboard gives you a
+    grep target.
+  </p>
+
+  <h2>Runbooks</h2>
+  <ul>
+    <li><a href="/connect/claude-code/">Claude Code</a> — tested</li>
+    <li><a href="/connect/codex/">Codex</a> — tested</li>
+    <li><a href="/connect/hermes/">Hermes</a> — bridge-supported</li>
+    <li><a href="/connect/custom-http/">Custom &amp; hosted agents (GrokBot path)</a> — bridge-supported</li>
+    <li><a href="/connect/openclaw/">OpenClaw</a> — not yet verified</li>
+  </ul>
+  <p>
+    Rather implement <code>caret/v1</code> yourself, or plug a command line
+    into the full reference backend (dictation and images included)? That is
+    <a href="/your-agent/">the implementation guide</a>.
+  </p>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="/connect/">Connect</a>
+    <a href="/your-agent/">Your Agent</a>
+  </div>
+</footer>
+</body>
+</html>

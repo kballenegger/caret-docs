@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect Codex to Caret</title>
+<meta name="description" content="Runbook: put the Caret Agent Bridge in front of the Codex CLI — read-only sandbox, ephemeral sessions — on a local Mac or a VPS.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <img src="/assets/caret-mark.svg" alt="Caret mark">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/connect/" aria-current="page">Connect</a>
+      <a href="/your-agent/">Your Agent</a>
+      <a href="https://typewithcaret.com">typewithcaret.com</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <p class="kicker">connect · codex</p>
+  <h1>Codex behind your keyboard.</h1>
+  <p class="lead">
+    The bridge runs one <code>codex exec</code> per draft in a read-only
+    sandbox with an ephemeral session, captures the final message cleanly, and
+    hands it to Caret.
+  </p>
+
+  <div class="note">
+    <strong>Status: tested</strong>
+    <p style="margin:0.4rem 0 0">
+      This preset was verified end to end against a real Codex install: a live
+      draft came back through the bridge. The exact command per draft is
+      <code>codex exec --sandbox read-only --skip-git-repo-check --ephemeral
+      --output-last-message &lt;file&gt; "&lt;prompt&gt;"</code> — stock,
+      documented CLI syntax throughout.
+    </p>
+  </div>
+
+  <p>
+    One mechanical detail worth knowing: Codex prints an event log on stdout,
+    not the answer. The bridge therefore uses the documented
+    <code>--output-last-message</code> flag to have the final message written
+    to a temp file it reads and deletes — you get the draft, never the log.
+  </p>
+
+  <h2>What you need</h2>
+  <ul>
+    <li>The <code>codex</code> CLI installed and authenticated on the machine
+        that will run the bridge (an API-key environment or
+        <code>codex login</code> — whatever your install already uses).</li>
+    <li>Python 3.10+.</li>
+    <li>Tailscale on that machine and your iPhone, <em>or</em> a domain for
+        public HTTPS on a VPS.</li>
+  </ul>
+
+  <h2>1 · Get and configure the bridge</h2>
+  <pre><code>curl -fsSLO https://docs.typewithcaret.com/agent-bridge/caret_agent_bridge.py
+
+export CARET_BRIDGE_BACKEND=codex
+export CARET_BRIDGE_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+echo "$CARET_BRIDGE_API_KEYS"               # paste this into Caret later
+
+python3 caret_agent_bridge.py --check</code></pre>
+  <p>To pin a model, extend the documented command line, keeping the safety flags:</p>
+  <pre><code>export CARET_BRIDGE_COMMAND='codex exec --sandbox read-only --skip-git-repo-check --ephemeral --output-last-message {out} -m gpt-5.2 {prompt}'</code></pre>
+  <p>
+    <code>{out}</code> is the answer-file path the bridge substitutes;
+    <code>{prompt}</code> is the framed drafting prompt. Commands containing
+    <code>--dangerously-bypass-approvals-and-sandbox</code> or
+    <code>danger-full-access</code> are refused at startup.
+  </p>
+
+  <h2>2 · Run it and smoke-test locally</h2>
+  <pre><code>python3 caret_agent_bridge.py --port 8790 &amp;
+
+curl -s localhost:8790/v1/health | python3 -m json.tool
+curl -s -X POST localhost:8790/v1/draft \
+  -H "Authorization: Bearer $CARET_BRIDGE_API_KEYS" \
+  -H 'Content-Type: application/json' \
+  -d '{"client_request_id":"smoke-1",
+       "input":{"type":"text","text":"tell Sam I am running ten minutes late"}}'</code></pre>
+
+  <h2>3a · Local Mac</h2>
+  <pre><code>tailscale serve --bg 8790
+# https://your-mac.your-tailnet.ts.net  ← this is the URL for Caret</code></pre>
+  <p>
+    Private HTTPS over your tailnet, nothing public, certificates handled.
+    Supervise the bridge with a LaunchAgent or a <code>tmux</code> session if
+    you want it up across reboots.
+  </p>
+
+  <h2>3b · VPS or hosted box</h2>
+  <p><strong>Tailnet (no open ports):</strong> <code>tailscale serve --bg 8790</code>, as above.</p>
+  <p><strong>Public HTTPS with Caddy:</strong></p>
+  <pre><code># /etc/caddy/Caddyfile
+caret.yourdomain.com {
+    reverse_proxy 127.0.0.1:8790
+}</code></pre>
+  <p>
+    The bridge stays on loopback; Caddy terminates TLS with automatic
+    Let's Encrypt certificates. Run bridge and CLI as a dedicated
+    low-privilege user (<code>useradd -m caret-bridge</code>) and
+    authenticate Codex as that user — the read-only sandbox then applies on
+    top of an account that has nothing interesting to read.
+  </p>
+
+  <h2>4 · Pair with Caret</h2>
+  <ol>
+    <li>Caret settings → your bridge URL.</li>
+    <li>Paste the API key.</li>
+    <li>The health check confirms text-only Ask — no microphone will be
+        offered, which is honest, because this bridge cannot transcribe.</li>
+  </ol>
+
+  <h2>Troubleshooting</h2>
+  <table>
+    <tr><th>Symptom</th><th>Fix</th></tr>
+    <tr><td><code>configuration error: 'codex' not found on PATH</code></td>
+        <td>Install the CLI for the bridge's user, or fix PATH in the
+            environment that launches the bridge.</td></tr>
+    <tr><td><code>503 internal_error: codex exited 1: …</code></td>
+        <td>Usually authentication or provider config. Run
+            <code>codex exec --sandbox read-only --skip-git-repo-check "say ok"</code>
+            by hand as the bridge's user.</td></tr>
+    <tr><td><code>503 internal_error: codex returned an empty answer</code></td>
+        <td>The run produced no final message — the same manual command shows
+            why.</td></tr>
+    <tr><td><code>504 draft_timeout</code></td>
+        <td>Pin a faster model (above) or raise
+            <code>CARET_BRIDGE_TIMEOUT_S</code>.</td></tr>
+  </table>
+  <p>
+    General transport and pairing problems are covered on
+    <a href="/connect/">the Connect overview</a>.
+  </p>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="/connect/">Connect</a>
+    <a href="/your-agent/">Your Agent</a>
+  </div>
+</footer>
+</body>
+</html>

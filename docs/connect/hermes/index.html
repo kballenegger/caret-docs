@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect Hermes to Caret</title>
+<meta name="description" content="Runbook: put the Caret Agent Bridge in front of the Hermes CLI — stock non-interactive chat mode — on a local Mac or a VPS, with toolset narrowing.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <img src="/assets/caret-mark.svg" alt="Caret mark">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/connect/" aria-current="page">Connect</a>
+      <a href="/your-agent/">Your Agent</a>
+      <a href="https://typewithcaret.com">typewithcaret.com</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <p class="kicker">connect · hermes</p>
+  <h1>Hermes behind your keyboard.</h1>
+  <p class="lead">
+    The bridge runs one <code>hermes chat -q "&lt;prompt&gt;" -Q</code> per
+    draft — the stock single-query, quiet-mode invocation — and hands stdout
+    to Caret.
+  </p>
+
+  <div class="note">
+    <strong>Status: bridge-supported</strong>
+    <p style="margin:0.4rem 0 0">
+      The preset uses only stock, documented Hermes CLI syntax
+      (<code>-q/--query</code> single-query non-interactive mode,
+      <code>-Q/--quiet</code> quiet mode for programmatic use), and the
+      bridge's construction of that command is covered by the hermetic test
+      suite. The suite does not execute a real Hermes install, so drafts
+      through your particular Hermes configuration are yours to smoke-test —
+      step 2 does exactly that. The bridge patches no Hermes source and reads
+      or writes no Hermes config.
+    </p>
+  </div>
+
+  <h2>What you need</h2>
+  <ul>
+    <li>The <code>hermes</code> CLI installed and configured on the machine
+        that will run the bridge (<code>hermes chat -q "say ok" -Q</code>
+        answers).</li>
+    <li>Python 3.10+.</li>
+    <li>Tailscale on that machine and your iPhone, <em>or</em> a domain for
+        public HTTPS on a VPS.</li>
+  </ul>
+
+  <h2>1 · Get and configure the bridge</h2>
+  <pre><code>curl -fsSLO https://docs.typewithcaret.com/agent-bridge/caret_agent_bridge.py
+
+export CARET_BRIDGE_BACKEND=hermes
+export CARET_BRIDGE_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+echo "$CARET_BRIDGE_API_KEYS"               # paste this into Caret later
+
+python3 caret_agent_bridge.py --check</code></pre>
+
+  <h3>Narrow what a draft can reach — recommended, not optional</h3>
+  <p>
+    Be clear-eyed about the default: a <code>hermes chat</code> call inherits
+    whatever toolsets <em>your</em> Hermes configuration enables. The bridge
+    never widens that — but it cannot narrow it silently either, because
+    overriding your configuration behind your back would be its own kind of
+    surprise. The drafting prompt says "write the message, take no action",
+    and a prompt is an instruction, not an enforcement boundary.
+  </p>
+  <p>
+    So narrow it yourself, with the documented flag, in one line:
+  </p>
+  <pre><code># restrict drafting calls to the toolsets you name (hermes tools list shows yours)
+export CARET_BRIDGE_COMMAND='hermes chat -q "{prompt}" -Q -t clarify'
+
+# and/or pin model and provider — documented hermes chat options
+export CARET_BRIDGE_COMMAND='hermes chat -q "{prompt}" -Q -t clarify -m gpt-5.2 --provider openai'</code></pre>
+  <p>
+    Better still, run the bridge as a dedicated low-privilege user with its
+    own minimal Hermes profile — then the account boundary does what no flag
+    or prompt can.
+  </p>
+
+  <h2>2 · Run it and smoke-test locally</h2>
+  <pre><code>python3 caret_agent_bridge.py --port 8790 &amp;
+
+curl -s localhost:8790/v1/health | python3 -m json.tool
+curl -s -X POST localhost:8790/v1/draft \
+  -H "Authorization: Bearer $CARET_BRIDGE_API_KEYS" \
+  -H 'Content-Type: application/json' \
+  -d '{"client_request_id":"smoke-1",
+       "input":{"type":"text","text":"tell Sam I am running ten minutes late"}}'</code></pre>
+  <p>
+    This smoke test is the step that turns "bridge-supported" into "works on
+    my machine, verified" — for your install, which is the one that matters.
+  </p>
+
+  <h2>3a · Local Mac</h2>
+  <pre><code>tailscale serve --bg 8790
+# https://your-mac.your-tailnet.ts.net  ← this is the URL for Caret</code></pre>
+  <p>
+    Private HTTPS over your tailnet; nothing public; certificates handled.
+    Supervise with a LaunchAgent or <code>tmux</code> to survive reboots.
+  </p>
+
+  <h2>3b · VPS or hosted box</h2>
+  <p><strong>Tailnet (no open ports):</strong> <code>tailscale serve --bg 8790</code>, as above.</p>
+  <p><strong>Public HTTPS with Caddy:</strong></p>
+  <pre><code># /etc/caddy/Caddyfile
+caret.yourdomain.com {
+    reverse_proxy 127.0.0.1:8790
+}</code></pre>
+  <p>
+    Bridge on loopback, proxy terminates TLS, bearer key is the lock. On a
+    shared or long-lived box, the dedicated-user recommendation above stops
+    being a recommendation and becomes the setup.
+  </p>
+
+  <h2>4 · Pair with Caret</h2>
+  <ol>
+    <li>Caret settings → your bridge URL.</li>
+    <li>Paste the API key.</li>
+    <li>The health check reports text-only Ask; Caret hides dictation and
+        Imagine.</li>
+  </ol>
+
+  <h2>Troubleshooting</h2>
+  <table>
+    <tr><th>Symptom</th><th>Fix</th></tr>
+    <tr><td><code>configuration error: 'hermes' not found on PATH</code></td>
+        <td>The bridge's user cannot see the CLI — install or PATH-fix for
+            that user.</td></tr>
+    <tr><td><code>503 internal_error: hermes exited N: …</code></td>
+        <td>Run <code>hermes chat -q "say ok" -Q</code> as the bridge's user;
+            the stderr tail in the bridge's error is the same story,
+            truncated.</td></tr>
+    <tr><td>Drafts contain banner or spinner text</td>
+        <td>Your command override lost <code>-Q</code>. Quiet mode is what
+            keeps stdout answer-only.</td></tr>
+    <tr><td><code>504 draft_timeout</code></td>
+        <td>Pin a faster model (above) or raise
+            <code>CARET_BRIDGE_TIMEOUT_S</code>.</td></tr>
+  </table>
+  <p>
+    General transport and pairing problems are covered on
+    <a href="/connect/">the Connect overview</a>.
+  </p>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="/connect/">Connect</a>
+    <a href="/your-agent/">Your Agent</a>
+  </div>
+</footer>
+</body>
+</html>

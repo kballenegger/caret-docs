@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect a custom or hosted agent to Caret</title>
+<meta name="description" content="Runbook: connect any hosted agent — a GrokBot-style bot, a service on a box you rent, anything with an HTTP endpoint — to Caret through the bridge's narrow prompt-in, text-out contract.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <img src="/assets/caret-mark.svg" alt="Caret mark">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/connect/" aria-current="page">Connect</a>
+      <a href="/your-agent/">Your Agent</a>
+      <a href="https://typewithcaret.com">typewithcaret.com</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <p class="kicker">connect · custom-http</p>
+  <h1>A hosted agent behind your keyboard.</h1>
+  <p class="lead">
+    For agents that are not a local CLI: a GrokBot-style bot you already
+    host, a service on a box you rent, anything you can put one HTTP endpoint
+    in front of. The bridge forwards each draft as a single JSON POST.
+  </p>
+
+  <div class="note">
+    <strong>Status: bridge-supported</strong>
+    <p style="margin:0.4rem 0 0">
+      The bridge's side of this contract — request shape, auth header, error
+      mapping for unreachable/failing/malformed upstreams — is fully covered
+      by the hermetic test suite. Your upstream is yours: this page defines
+      exactly what it must do, and the smoke test in step 3 is the
+      verification. No claim is made about any particular hosted agent
+      product.
+    </p>
+  </div>
+
+  <h2>The contract your endpoint implements</h2>
+  <p>One request per draft. Deliberately as small as a contract can be:</p>
+  <pre><code>POST &lt;CARET_BRIDGE_HTTP_URL&gt;
+Content-Type: application/json
+Authorization: Bearer &lt;CARET_BRIDGE_HTTP_BEARER&gt;     // only if you set one
+
+{"prompt": "&lt;the framed drafting prompt&gt;"}
+
+→ 200
+{"text": "&lt;the finished draft&gt;"}</code></pre>
+  <table>
+    <tr><th>Your endpoint does</th><th>The bridge answers Caret</th></tr>
+    <tr><td>200 with a non-empty string <code>text</code></td>
+        <td>the draft, as normal</td></tr>
+    <tr><td>Any non-200</td>
+        <td><code>503 internal_error</code>, retryable</td></tr>
+    <tr><td>Non-JSON body, or JSON without <code>text</code></td>
+        <td><code>503 internal_error</code>, retryable</td></tr>
+    <tr><td>Unreachable / times out</td>
+        <td><code>503 internal_error</code> / <code>504 draft_timeout</code>,
+            retryable</td></tr>
+  </table>
+  <p>
+    The prompt arrives fully framed — instruction, optional near-cursor text,
+    optional app hint, and the read-only "this is a draft, take no action"
+    instruction. Your endpoint sends it to your agent and returns the reply.
+    A five-line handler in any web framework is a complete implementation.
+  </p>
+
+  <h2>1 · Stand up the endpoint next to your agent</h2>
+  <p>
+    Wherever the agent lives — the GrokBot's host, your VPS, a PaaS — add one
+    route that receives <code>{"prompt"}</code>, calls the agent
+    <em>text-in, text-out</em>, and returns <code>{"text"}</code>. Keep it as
+    dumb as possible:
+  </p>
+  <ul>
+    <li>Do not give the route tool access, memory writes, or side effects —
+        it is a drafting call, and the prompt says so.</li>
+    <li>Require the bearer token if the endpoint is reachable beyond
+        loopback.</li>
+    <li>Do not log the prompt or the reply; log a request id and a status,
+        the way the bridge does.</li>
+  </ul>
+
+  <h2>2 · Configure the bridge</h2>
+  <p>
+    Run the bridge wherever you like — same box as the endpoint (then the URL
+    is loopback and needs no TLS of its own) or your Mac pointing at the
+    hosted endpoint over HTTPS:
+  </p>
+  <pre><code>curl -fsSLO https://docs.typewithcaret.com/agent-bridge/caret_agent_bridge.py
+
+export CARET_BRIDGE_BACKEND=custom-http
+export CARET_BRIDGE_HTTP_URL='https://agent.yourdomain.com/caret-draft'
+export CARET_BRIDGE_HTTP_BEARER='…'          # whatever your endpoint checks
+export CARET_BRIDGE_API_KEYS="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+echo "$CARET_BRIDGE_API_KEYS"                # paste this into Caret later
+
+python3 caret_agent_bridge.py --check
+python3 caret_agent_bridge.py --port 8790</code></pre>
+  <p>
+    Two keys, two directions, on purpose: <code>CARET_BRIDGE_API_KEYS</code>
+    is what <em>Caret</em> presents to the bridge;
+    <code>CARET_BRIDGE_HTTP_BEARER</code> is what the <em>bridge</em>
+    presents to your endpoint. Neither is ever logged.
+  </p>
+
+  <h2>3 · Smoke-test the whole chain</h2>
+  <pre><code>curl -s localhost:8790/v1/health | python3 -m json.tool
+curl -s -X POST localhost:8790/v1/draft \
+  -H "Authorization: Bearer $CARET_BRIDGE_API_KEYS" \
+  -H 'Content-Type: application/json' \
+  -d '{"client_request_id":"smoke-1",
+       "input":{"type":"text","text":"tell Sam I am running ten minutes late"}}'</code></pre>
+  <p>
+    A draft here proves bridge → endpoint → agent → back. This is the step
+    that verifies <em>your</em> integration.
+  </p>
+
+  <h2>4 · Host modes and pairing</h2>
+  <p>
+    <strong>Bridge on the hosted box:</strong> bind loopback, put the box's
+    TLS in front — <code>tailscale serve --bg 8790</code> for a tailnet-only
+    URL, or a Caddy site block (<code>reverse_proxy 127.0.0.1:8790</code>)
+    for public HTTPS. <strong>Bridge on your Mac:</strong> point
+    <code>CARET_BRIDGE_HTTP_URL</code> at the hosted endpoint over HTTPS and
+    expose the bridge to your phone with
+    <code>tailscale serve --bg 8790</code>. Then pair as always: URL + key in
+    Caret settings, health check confirms text-only Ask.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <table>
+    <tr><th>Symptom</th><th>Fix</th></tr>
+    <tr><td><code>503 internal_error: upstream agent unreachable</code></td>
+        <td>The bridge cannot reach <code>CARET_BRIDGE_HTTP_URL</code> —
+            <code>curl</code> it from the bridge's machine.</td></tr>
+    <tr><td><code>503 internal_error: upstream agent answered HTTP 401/403</code></td>
+        <td>Your endpoint rejected the bearer —
+            <code>CARET_BRIDGE_HTTP_BEARER</code> mismatch.</td></tr>
+    <tr><td><code>503 internal_error: upstream agent response has no "text"</code></td>
+        <td>Your endpoint's response shape is off. It must be a JSON object
+            with a non-empty string <code>text</code>.</td></tr>
+    <tr><td><code>504 draft_timeout</code></td>
+        <td>The whole chain must answer inside
+            <code>CARET_BRIDGE_TIMEOUT_S</code> (90 s default).</td></tr>
+  </table>
+  <p>
+    General transport and pairing problems are covered on
+    <a href="/connect/">the Connect overview</a>.
+  </p>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="/connect/">Connect</a>
+    <a href="/your-agent/">Your Agent</a>
+  </div>
+</footer>
+</body>
+</html>
