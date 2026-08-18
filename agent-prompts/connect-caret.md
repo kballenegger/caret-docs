@@ -30,7 +30,7 @@ exactly what it permits.
 Before configuring a provider, read its short provider runbook as well as
 this prompt. It gives provider-specific defaults and integration steps.
 
-- **GrokBot:** [connect-grok.md](https://docs.typewithcaret.com/agent-prompts/connect-grok.md)
+- **GrokBot:** [connect-grok.md](https://raw.githubusercontent.com/kballenegger/caret-docs/main/agent-prompts/connect-grok.md)
 
 ## How the backend routes capabilities — set expectations first
 
