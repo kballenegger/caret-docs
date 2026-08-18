@@ -158,6 +158,23 @@ class PromptPolicyTests(unittest.TestCase):
         ):
             self.assertIn(phrase, self.lower, phrase)
 
+    def test_a_counted_quantity_is_digits_and_idiom_is_not(self):
+        # A live cleanup returned a dictated "twelve eggs" as words. The
+        # old wording named "quantities" but never said that a small
+        # cardinal standing in front of its noun is one, so the model was
+        # free to read it as prose. Both halves of the rule are explicit
+        # now: the count converts, the idiom does not.
+        self.assertIn(
+            "cardinal number spoken directly in front of the thing it counts",
+            self.lower,
+        )
+        self.assertIn("becomes digits however small it is", self.lower)
+        self.assertIn('"twelve eggs" is "12 eggs"', self.lower)
+        self.assertIn("keep number words where words are natural", self.lower)
+        for idiom in ("a couple of hundred", "one of the things",
+                      "a thousand times over"):
+            self.assertIn(idiom, self.lower, idiom)
+
     def test_spoken_punctuation_converts_only_when_unambiguous(self):
         self.assertIn("only when it is unambiguously an instruction", self.lower)
         for ambiguous in ("a dash of salt", "slash and burn", "colon cancer"):

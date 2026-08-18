@@ -40,9 +40,11 @@ python3 scripts/build_cleanup_spec.py --check  # fail if they are stale (runs in
   unsure about is kept as transcribed rather than guessed at.
 * **Only formatting changes.** Filler and false starts go; punctuation,
   capitalization and paragraphs arrive; dictated lists become real
-  lists; numbers become digits where digits are the written norm;
-  technical abbreviations stay abbreviated; spoken punctuation and
-  layout words convert only when unambiguous.
+  lists; numbers become digits where digits are the written norm —
+  including a cardinal counting the noun right after it, so "twelve
+  eggs" is "12 eggs", while idiom such as "a thousand times over" keeps
+  its words; technical abbreviations stay abbreviated; spoken
+  punctuation and layout words convert only when unambiguous.
 * **Code stays plain.** Code, commands, paths, identifiers, URLs, JSON
   and YAML are written as plain typed text with exact characters. The
   prompt explicitly forbids adding Markdown backticks or fences that the
@@ -84,7 +86,7 @@ either one depending on the other. A consumer:
    its test rather than shipping.
 
 Report the digest, never the prompt, on any health or status surface:
-`caret-cleanup/1 97dbce336ba0bebb` identifies the wording without
+`caret-cleanup/1 6b29554b9f08150e` identifies the wording without
 disclosing a line of it.
 
 ## Failure policy

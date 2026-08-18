@@ -380,7 +380,7 @@ paths:
         The exact wording is published as versioned, hashed data at
         `/spec/cleanup/v1/`. `GET /v2/health` names the wording a
         deployment runs by digest under `routes.dictate.cleanup.spec`
-        (for example `caret-cleanup/1 97dbce336ba0bebb`), so two
+        (for example `caret-cleanup/1 6b29554b9f08150e`), so two
         implementations can be compared without either one disclosing a
         prompt.
       parameters:
@@ -1491,7 +1491,7 @@ components:
                 route: agent
                 provider: hermes
                 constrained: true
-                spec: "caret-cleanup/1 97dbce336ba0bebb"
+                spec: "caret-cleanup/1 6b29554b9f08150e"
                 glossary_terms: 12
             ask: { route: agent, provider: hermes }
             imagine: { route: "off" }
