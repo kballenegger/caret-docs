@@ -355,7 +355,9 @@ paths:
         rewritten into corporate prose — and wording the STT engine was
         unsure about is kept as transcribed.
 
-        Only formatting changes: filler and false starts are removed,
+        Only formatting changes: filler and false starts are removed —
+        including "like" where it is a verbal tic, though a "like" that
+        means something (a comparison, the verb, a conjunction) stays —
         unambiguous STT errors are corrected, punctuation, capitalization
         and paragraphs are added, dictated lists become real lists,
         numbers become digits where digits are the written norm, technical
@@ -380,7 +382,7 @@ paths:
         The exact wording is published as versioned, hashed data at
         `/spec/cleanup/v1/`. `GET /v2/health` names the wording a
         deployment runs by digest under `routes.dictate.cleanup.spec`
-        (for example `caret-cleanup/1 6b29554b9f08150e`), so two
+        (for example `caret-cleanup/1 20ab781577580c29`), so two
         implementations can be compared without either one disclosing a
         prompt.
       parameters:
@@ -1491,7 +1493,7 @@ components:
                 route: agent
                 provider: hermes
                 constrained: true
-                spec: "caret-cleanup/1 6b29554b9f08150e"
+                spec: "caret-cleanup/1 20ab781577580c29"
                 glossary_terms: 12
             ask: { route: agent, provider: hermes }
             imagine: { route: "off" }

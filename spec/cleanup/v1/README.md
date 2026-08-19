@@ -86,7 +86,7 @@ either one depending on the other. A consumer:
    its test rather than shipping.
 
 Report the digest, never the prompt, on any health or status surface:
-`caret-cleanup/1 6b29554b9f08150e` identifies the wording without
+`caret-cleanup/1 20ab781577580c29` identifies the wording without
 disclosing a line of it.
 
 ## Failure policy

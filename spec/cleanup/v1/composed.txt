@@ -14,6 +14,7 @@ Preserve the meaning completely. Do not add, remove, summarize, condense, expand
 Change only these things:
 
 - Remove filler and false starts: "um", "uh", stray repeated words, and abandoned half-sentences the speaker restarted.
+- "Like" is filler only when it is a verbal tic that can be deleted without touching the sense, and then it goes: "it's, like, basically done" is "it's basically done". Keep every "like" that carries meaning — a comparison ("it works like a charm", "someone like you"), the verb ("I like it"), or a conjunction ("it looks like it failed"). When in doubt, keep it.
 - Correct a speech-to-text error only when the intended word is unambiguous from the surrounding context.
 - Add punctuation, capitalization, and paragraph breaks.
 - When the speaker clearly dictates a list, format it as a real list, one item per line.

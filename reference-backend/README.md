@@ -227,7 +227,7 @@ Health names the wording by digest, never by reciting it:
 ```sh
 curl -s localhost:8787/v2/health | python3 -c 'import json,sys; print(json.load(sys.stdin)["routes"]["dictate"]["cleanup"])'
 # {'route': 'agent', 'provider': 'hermes', 'constrained': True,
-#  'spec': 'caret-cleanup/1 6b29554b9f08150e', 'glossary_terms': 12}
+#  'spec': 'caret-cleanup/1 20ab781577580c29', 'glossary_terms': 12}
 ```
 
 Two implementations that report the same `spec` string send the same

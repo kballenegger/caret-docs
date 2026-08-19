@@ -158,6 +158,19 @@ class PromptPolicyTests(unittest.TestCase):
         ):
             self.assertIn(phrase, self.lower, phrase)
 
+    def test_like_is_filler_only_when_it_carries_no_meaning(self):
+        # "Remove filler" on its own left "like" to the model's judgement,
+        # and it went both ways: a tic survived in one dictation, a
+        # comparison was deleted in another. Both halves are spelled out
+        # now — one worked example of the filler use that goes, and one of
+        # the comparison that stays.
+        self.assertIn('"like" is filler only when it is a verbal tic', self.lower)
+        self.assertIn('"it\'s, like, basically done" is "it\'s basically done"',
+                      self.lower)
+        self.assertIn("keep every \"like\" that carries meaning", self.lower)
+        self.assertIn("it works like a charm", self.lower)
+        self.assertIn("when in doubt, keep it", self.lower)
+
     def test_a_counted_quantity_is_digits_and_idiom_is_not(self):
         # A live cleanup returned a dictated "twelve eggs" as words. The
         # old wording named "quantities" but never said that a small
