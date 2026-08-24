@@ -318,6 +318,18 @@
     There is <strong>no finalize or transcript endpoint</strong> — the
     operation itself consumes the session.
   </p>
+  <div class="note">
+    <strong>Optional fast path: V3 live dictation.</strong>
+    <p style="margin:0.4rem 0 0">
+      A backend with a streaming recognizer can additionally serve the
+      <a href="/live-dictation/">caret/v3 live-dictation WebSocket</a> —
+      partial transcripts while the user speaks, one terminal result.
+      It is additive: advertise it with <code>capabilities.live_dictate</code>,
+      and keep these V2 session endpoints working — they remain the
+      recovery path for backgrounding, offline, and retries.
+    </p>
+  </div>
+
   <pre><code>POST /v2/sessions                      → session_id
 PUT  /v2/sessions/{id}/chunks/0, /1, … → as the user speaks
   ├── POST /v2/dictate {input:{type:"session", …}}  → transcript

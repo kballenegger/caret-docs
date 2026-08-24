@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Caret BYOB API
-  version: 2.0.0
+  version: 2.2.0
   summary: The bring-your-own-backend contract for the Caret iOS keyboard, version 2 (`caret/v2`).
   description: |
     Caret operates with no first-party backend. The user configures a backend
@@ -11,7 +11,13 @@ info:
     implementation.
 
     `caret/v1` is deprecated and no longer documented; V2 is the only
-    supported contract.
+    supported contract. A backend may additionally offer the optional V3
+    live-dictation WebSocket (`/v3/dictate`, advertised at
+    `capabilities.live_dictate`); OpenAPI does not model WebSocket
+    exchanges, so that surface is specified in prose at
+    [/live-dictation/](https://docs.typewithcaret.com/live-dictation/).
+    Everything in this document is unchanged V2 and remains the recovery
+    path for live clients.
 
     V2 has exactly three product operations:
 
@@ -862,6 +868,11 @@ paths:
         session rejects further chunks with `409 session_conflict`. The
         client uploads chunks serially with retry/backoff and keeps every
         chunk on disk until the consuming operation succeeds.
+
+        When the backend transcribes sessions with a streaming engine
+        (`stt_streaming: true` on the session-open response), each chunk
+        response also carries an `stt` object with the words detected so
+        far — see `ChunkSTT`.
       parameters:
         - $ref: "#/components/parameters/CaretClient"
         - name: session_id
@@ -1446,6 +1457,13 @@ components:
             dictate: { type: boolean }
             ask: { type: boolean }
             imagine: { type: boolean }
+            live_dictate:
+              type: boolean
+              description: |
+                Optional. True when the backend serves the V3
+                live-dictation WebSocket at `/v3/dictate` (see
+                [/live-dictation/](https://docs.typewithcaret.com/live-dictation/)).
+                Absent means false; clients then use V2 sessions only.
             input_modes:
               type: object
               description: |
@@ -1887,6 +1905,12 @@ components:
           type: string
           format: date-time
           description: When the unconsumed session is discarded server-side.
+        stt_streaming:
+          type: boolean
+          description: |
+            Optional. True when the backend transcribes sessions with a
+            streaming engine, so chunk-upload responses will carry the
+            `stt` partial-transcript object. Absent means false.
         request_id:
           type: string
 
@@ -1900,7 +1924,29 @@ components:
         duplicate:
           type: boolean
           description: True when this exact chunk was already stored (idempotent replay).
+        stt: { $ref: "#/components/schemas/ChunkSTT" }
         request_id: { type: string }
+
+    ChunkSTT:
+      type: object
+      description: |
+        Optional live partial-transcription state, present on chunk-upload
+        responses when the backend streams session audio to its STT engine
+        (`stt_streaming: true` on session open). `text` is the transcript
+        accumulated across the WHOLE session so far — never a per-chunk
+        delta; each response supersedes every earlier one, and it may be
+        empty while speech is still being decoded. `mode: "unavailable"`
+        means the stream failed for this session: no further partials will
+        come and the final transcript is produced by the backend's
+        merged-audio fallback when the session is consumed — keep
+        uploading and consume as usual. The authoritative transcript is
+        still the one the consuming operation returns; this is a preview.
+      required: [mode, text]
+      properties:
+        mode: { type: string, enum: [streaming, unavailable] }
+        text: { type: string }
+        segments: { type: integer, minimum: 0 }
+        partials: { type: integer, minimum: 0 }
 
     AckResponse:
       type: object
