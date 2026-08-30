@@ -116,6 +116,15 @@ def check_retired_references(html: str, page_rel: str) -> list[str]:
     return findings
 
 
+def check_stub_target(html: str, page_rel: str) -> list[str]:
+    """Ensure a retired URL redirects to its corresponding archive page."""
+    expected = "/legacy/" + page_rel.removesuffix("/index.html") + "/"
+    targets = re.findall(r"url=(/legacy/[^\"'\s>]+)", html)
+    if expected not in targets:
+        return [f"docs/{page_rel}: redirect stub does not target {expected}"]
+    return []
+
+
 def main() -> int:
     findings: list[str] = []
     known = site_paths()
@@ -133,8 +142,7 @@ def main() -> int:
         findings.extend(check_links(html, rel, known))
 
         if is_stub:
-            if not re.search(r'url=/legacy/', html):
-                findings.append(f"docs/{rel}: redirect stub does not target /legacy/")
+            findings.extend(check_stub_target(html, rel))
         elif is_legacy:
             if rel != "legacy/index.html" and ARCHIVE_MARKER not in html:
                 findings.append(f"docs/{rel}: archived page missing {ARCHIVE_MARKER} banner")
