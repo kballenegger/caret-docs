@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Public reference implementation — design</title>
+<meta name="description" content="The design for the public caret/v4 reference backend: a small, readable, dependency-light server with pluggable recognizer, agent, and image lanes, plus a conformance checker. Status: design — not yet published.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <img src="/assets/caret-mark.svg" alt="Caret mark">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/protocol/">Protocol</a>
+      <a href="/reference/" aria-current="page">Reference</a>
+      <a href="/migration/">Migration</a>
+      <a href="/cleanup/">Cleanup</a>
+      <a href="/imagine-references/">Imagine</a>
+      <a href="/legacy/">Legacy</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <p class="kicker">caret/v4 · reference implementation · design</p>
+  <h1>The public reference backend, by design.</h1>
+  <p class="lead">
+    This page specifies the public <code>caret/v4</code> reference
+    implementation: what it will be, what it will refuse to be, and how its
+    pieces fit. It exists so that the code, when it lands in this
+    repository, has a contract of its own to be judged against.
+  </p>
+
+  <div class="note">
+    <strong>Status: design. There is no code to download yet.</strong>
+    <p style="margin:0.4rem 0 0">
+      Nothing on this page is shipped, and nothing on it has been tested,
+      because it does not exist yet. The <code>caret/v4</code> protocol
+      itself is not hypothetical — Caret's own production backend
+      implements it end to end — but that implementation is private and is
+      not this design. Until the public reference lands, implement V4
+      directly from <a href="/protocol/">the protocol page</a>; it is
+      written to be sufficient on its own. The archived
+      <a href="/legacy/">V2 reference backend</a> remains available but
+      speaks a retired contract.
+    </p>
+  </div>
+
+  <h2>Goals, in order</h2>
+  <ol>
+    <li><strong>Readable before runnable.</strong> Like the archived V2
+        backend, it is meant to be read: every rule on
+        <a href="/protocol/">the protocol page</a> implemented once, in an
+        obvious place, in a codebase small enough to hold in your
+        head.</li>
+    <li><strong>Dependency-light.</strong> Standard library plus, at most,
+        one WebSocket library where the standard library has none. No
+        framework, no build pipeline, no container required.</li>
+    <li><strong>Pluggable lanes, honest capabilities.</strong> Speech,
+        agent, and image providers plug in behind narrow interfaces;
+        whatever fails to resolve is reported off in
+        <code>/health</code> rather than papered over — the same
+        capability-routing discipline the V2 backend proved out.</li>
+    <li><strong>A conformance checker, not just a server.</strong> The
+        deliverable is as much the harness that can interrogate <em>any</em>
+        V4 backend as it is the backend itself.</li>
+  </ol>
+
+  <h2>Shape</h2>
+  <pre><code>reference-v4/
+  server        the transport core: HTTP /health + the three WebSocket
+                routes, auth, framing, timeouts, the shared lifecycle
+                state machine — one implementation, three finalizers
+  lanes/
+    stt         streaming recognizer + batch fallback behind one
+                interface; local Whisper-class models first
+    agent       Ask: anything that takes a prompt and returns text —
+                a command line, an HTTP endpoint
+    image       Imagine: a command line or HTTP endpoint returning
+                image bytes
+  cleanup       caret-cleanup/1, consumed from spec/cleanup/v1/ as
+                data — never a fork of the wording
+  conformance   the checker: drives a live backend through the
+                lifecycle, the reliability rules, and the error table
+  tests         hermetic; loopback only, no model calls</code></pre>
+
+  <h2>Design decisions already fixed</h2>
+  <table>
+    <tr><th>Decision</th><th>Rationale</th></tr>
+    <tr><td>One lifecycle state machine shared by all three routes</td>
+        <td>The protocol says the routes differ only in finalizer and
+            result type; the code should prove that by construction.</td></tr>
+    <tr><td>Audio buffer independent of the recognizer</td>
+        <td>§8 of the protocol makes fallback mandatory; the buffer is the
+            server's half of the reliability contract.</td></tr>
+    <tr><td>Dictate-only is the default build</td>
+        <td>A conforming backend needs speech and nothing else. Agent and
+            image lanes activate only when configured, and
+            <code>/health</code> says so.</td></tr>
+    <tr><td>Vocabulary reaches both the recognizer and cleanup</td>
+        <td>Advertising <code>"vocabulary": true</code> while dropping the
+            list is forbidden by the protocol; the lane interfaces carry it
+            explicitly so no provider can lose it silently.</td></tr>
+    <tr><td>Zero retention by default</td>
+        <td>In-memory audio, bounded; cached results expire in minutes;
+            no transcript logging. Matching §10 exactly.</td></tr>
+  </table>
+
+  <h2>The conformance checker</h2>
+  <p>
+    The checker will treat the backend under test as a black box at a base
+    URL — any language, any host — and exercise what is easy to get subtly
+    wrong: audio-total verification and <code>audio_incomplete</code>,
+    exactly-one-terminal-event ordering after queued partials, cumulative
+    (never regressing) partial text, replay with a repeated
+    <code>client_request_id</code>, honest capabilities versus served
+    routes, and the full error table with its close codes. Exit 0 will
+    mean a V4 client will be happy.
+  </p>
+
+  <h2>What it will not be</h2>
+  <ul>
+    <li>Not a hosted service, not a relay — the protocol has no privileged
+        party, and neither will the reference.</li>
+    <li>Not a fork target for the cleanup wording: the spec is consumed
+        as data from <a href="/cleanup/"><code>spec/cleanup/v1/</code></a>,
+        digest-checked.</li>
+    <li>Not a V2 compatibility layer. Operators who need V2 during cutover
+        run the archived backend beside it — see
+        <a href="/migration/">migration</a>.</li>
+  </ul>
+
+  <p class="note">
+    When the implementation lands, this page becomes its README's front
+    door and gains the run instructions; until then, treat every command
+    and path above as design, not documentation of something you can
+    download.
+  </p>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="/">Overview</a>
+    <a href="/protocol/">Protocol</a>
+    <a href="/migration/">Migration</a>
+  </div>
+</footer>
+</body>
+</html>

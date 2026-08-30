@@ -25,7 +25,9 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "reference-backend"))
+# The composing code lives in the archived V2 reference backend; the
+# spec itself is active and versioned independently (caret-cleanup/1).
+sys.path.insert(0, str(REPO_ROOT / "legacy" / "reference-backend"))
 
 from caret_backend import cleanup  # noqa: E402
 

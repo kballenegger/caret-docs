@@ -15,11 +15,12 @@
     <span class="name"><a href="/">Caret Docs</a></span>
     <nav>
       <a href="/">Overview</a>
-      <a href="/connect/">Connect</a>
-      <a href="/your-agent/">Your Agent</a>
+      <a href="/protocol/">Protocol</a>
+      <a href="/reference/">Reference</a>
+      <a href="/migration/">Migration</a>
       <a href="/cleanup/">Cleanup</a>
       <a href="/imagine-references/" aria-current="page">Imagine</a>
-      <a href="https://typewithcaret.com">typewithcaret.com</a>
+      <a href="/legacy/">Legacy</a>
     </nav>
   </div>
 </header>
@@ -48,11 +49,11 @@
 
   <p>
     <strong>Imagine</strong> is the Caret surface where this belongs.
-    The keyboard sends a prompt to
-    <a href="/your-agent/"><code>POST /v2/imagine</code></a> and expects one
+    The keyboard sends a prompt over the
+    <a href="/protocol/"><code>/imagine</code></a> route and expects one
     image back; everything between those two points is yours. References are
     entirely a backend behavior — the contract does not change, no new
-    endpoint appears, and a backend without references stays perfectly valid.
+    route appears, and a backend without references stays perfectly valid.
   </p>
 
   <h2>What you are building</h2>
@@ -344,11 +345,11 @@ applied:    ada</code></pre>
   </ul>
 
   <p>
-    The contract side of Imagine — request shape, aspect ratio, quality,
-    idempotency, how to return the bytes — is on the
-    <a href="/your-agent/">implementation guide</a>. If you have not built a
-    backend yet, <a href="/connect/">connect the agent you already run</a>
-    first; references are something you add to a backend that already works.
+    The contract side of Imagine — the finalizer fields, aspect ratio,
+    quality, idempotent replay, how to return the bytes — is on the
+    <a href="/protocol/">protocol page</a>. If you have not built a backend
+    yet, build one against that page first; references are something you
+    add to a backend that already works.
   </p>
 </main>
 
@@ -358,7 +359,7 @@ applied:    ada</code></pre>
     <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
     <a href="/">Overview</a>
-    <a href="/your-agent/">Implementation guide</a>
+    <a href="/protocol/">Protocol</a>
   </div>
 </footer>
 </body>

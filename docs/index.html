@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Caret Docs — bring your own backend</title>
-<meta name="description" content="How to run Caret, the agentic iOS keyboard, against a backend you control. The caret/v2 contract, one input model for typed and spoken input, and a reference backend you can download.">
+<title>Caret Docs — the caret/v4 any-agent protocol</title>
+<meta name="description" content="How to run Caret, the agentic iOS keyboard, against a backend you control. The caret/v4 protocol: three WebSocket routes, one shared live-audio lifecycle, any client, any backend.">
 <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
 </head>
@@ -15,117 +15,106 @@
     <span class="name"><a href="/">Caret Docs</a></span>
     <nav>
       <a href="/" aria-current="page">Overview</a>
-      <a href="/connect/">Connect</a>
-      <a href="/your-agent/">Your Agent</a>
+      <a href="/protocol/">Protocol</a>
+      <a href="/reference/">Reference</a>
+      <a href="/migration/">Migration</a>
       <a href="/cleanup/">Cleanup</a>
       <a href="/imagine-references/">Imagine</a>
-      <a href="https://typewithcaret.com">typewithcaret.com</a>
+      <a href="/legacy/">Legacy</a>
     </nav>
   </div>
 </header>
 
 <main class="wrap">
-  <p class="kicker">Bring your own backend</p>
+  <p class="kicker">Bring your own backend · caret/v4</p>
   <h1>Your keyboard, your agent, your machine.</h1>
   <p class="lead">
-    Caret is a compose surface for iOS: speak or type an intent at the cursor,
-    preview, insert a finished message. Everything it does, it does by calling
-    an HTTP API you configure. One setup path covers almost everyone: connect
-    the agent you already run.
+    Caret is a compose surface for iOS: speak or type an intent at the
+    cursor, preview, insert a finished message. Everything it does, it does
+    by talking to a backend you configure — a base URL and a credential,
+    no account, no relay, no third party in the middle of your typing. The
+    contract between keyboard and backend is <code>caret/v4</code>, and
+    this site is its documentation.
   </p>
 
   <div class="card">
-    <h3>Connect the agent you already run<span class="pill">start here</span></h3>
+    <h3>The protocol<span class="pill">start here</span></h3>
     <p>
-      Already running Claude Code, Codex, Hermes, or a hosted agent of your
-      own? Deploy the <strong>Caret reference backend</strong> — stdlib
-      Python, canonical in the public
-      <a href="https://github.com/kballenegger/caret-docs">caret-docs</a>
-      repository — pick your agent with one config switch, and it answers
-      Ask while local OpenWhisper takes dictation by default. Validate it,
-      run it on your Mac or your VPS. Per-runtime runbooks, installable
-      plugins where the runtime supports them, and an honest compatibility
-      matrix of what has been tested versus what has not.
+      One base URL serving three WebSocket routes — <code>/dictate</code>,
+      <code>/ask</code>, <code>/imagine</code> — over one shared live-audio
+      lifecycle: stream speech up, watch partial transcripts arrive while
+      you talk, send the route's finalizer, get exactly one typed terminal
+      result. Health and capability discovery on <code>GET /health</code>,
+      auth owned by the backend, per-operation vocabulary injection, and a
+      reliability story built on client-side replay. The protocol page is
+      the complete, normative contract — everything you need to implement
+      either side.
     </p>
-    <p><a href="/connect/"><strong>Connect your agent →</strong></a></p>
-    <p>
-      Or point your coding agent at
-      <a href="/agent-prompts/connect-caret.md">the connect prompt</a> and it
-      does the download, configuration, validation, and deployment for you.
-    </p>
+    <p><a href="/protocol/"><strong>Read the caret/v4 protocol →</strong></a></p>
   </div>
 
   <div class="card">
-    <h3>Advanced: implement the API yourself<span class="pill">caret/v2</span></h3>
+    <h3>Any client, any backend<span class="pill">no privileged party</span></h3>
     <p>
-      Want a backend you fully own — a different language, a different
-      process model, your own providers? Implement the contract from
-      scratch. The implementation guide is one page with every request and
-      response shape; the conformance checker tells you when you are done.
+      The Caret keyboard is one client of this protocol, not its owner.
+      Anyone may implement a backend — your agent, your model, your
+      hardware, any language — and anyone may implement a client, and two
+      conforming implementations interoperate without coordination. A
+      public reference backend is specified as a design (with a
+      conformance checker as part of the deliverable) and will land in
+      this repository; it is not published yet, so today you implement
+      from the protocol page directly.
     </p>
-    <p><a href="/your-agent/">Read the implementation guide →</a> ·
-       <a href="/agent-prompts/implement-caret-backend.md">agent prompt</a> ·
-       <a href="/live-dictation/">V3 live dictation</a></p>
+    <p><a href="/reference/"><strong>The reference implementation design →</strong></a></p>
   </div>
 
-  <div class="card">
-    <h3>Imagine the same person twice<span class="pill">references</span></h3>
-    <p>
-      A text prompt cannot carry identity — “my sister at the beach” returns a
-      different stranger every time. Give each person, pet, or object a stored
-      <strong>reference sheet</strong> built from real photographs, and have
-      your backend attach it whenever the user names that subject. The guide
-      covers the photo set, the six-panel sheet, consent and access, and the
-      one rule that matters: never apply a reference nobody asked for.
-    </p>
-    <p><a href="/imagine-references/"><strong>Repeatable Imagine references →</strong></a></p>
-  </div>
-
-  <h2>The three operations</h2>
+  <h2>The three routes</h2>
   <table>
-    <tr><th>Operation</th><th>What happens</th><th>Endpoint</th></tr>
+    <tr><th>Route</th><th>What happens</th><th>Terminal result</th></tr>
     <tr>
-      <td><strong>Dictate</strong></td>
-      <td>Speech (or raw text) becomes polished, insert-ready text. Audio is
-          uploaded in small chunks as it is spoken, each verified by
-          SHA-256.</td>
-      <td><code>POST /v2/dictate</code></td>
+      <td><code>/dictate</code> · required</td>
+      <td>Speech becomes polished, insert-ready text. Partial transcripts
+          render while you speak; the final pass applies
+          <a href="/cleanup/">transcript cleanup</a> unless you opt
+          out.</td>
+      <td><code>"dictation"</code></td>
     </tr>
     <tr>
-      <td><strong>Ask</strong></td>
-      <td>An instruction — typed or spoken — becomes one insert-ready message.
-          Always previewed before it goes into the text field.</td>
-      <td><code>POST /v2/ask</code></td>
+      <td><code>/ask</code> · optional</td>
+      <td>An instruction — spoken or typed — becomes one message, previewed
+          before it is inserted.</td>
+      <td><code>"message"</code></td>
     </tr>
     <tr>
-      <td><strong>Imagine</strong></td>
-      <td>A typed or spoken prompt becomes an image, delivered through the
-          pasteboard.</td>
-      <td><code>POST /v2/imagine</code></td>
+      <td><code>/imagine</code> · optional</td>
+      <td>A spoken or typed prompt becomes an image, delivered as verified
+          bytes.</td>
+      <td><code>"image"</code></td>
     </tr>
   </table>
   <p>
-    All spoken input travels over one mode-neutral transport:
-    <code>POST /v2/sessions</code> opens a chunked audio session and
-    <code>PUT /v2/sessions/{id}/chunks/{seq}</code> uploads the audio —
-    the session does not know which operation will consume it.
+    Dictate is mandatory: a backend that cannot take speech is not a Caret
+    backend, and says so in <code>/health</code> rather than pretending.
+    Ask and Imagine are honestly optional — a dictate-only backend is a
+    complete backend, and the keyboard hides what a backend does not
+    advertise.
   </p>
-  <p>
-    <strong>Dictate is mandatory; Ask and Imagine are not.</strong> A valid
-    <code>caret/v2</code> backend takes speech and advertises
-    <code>"dictate": true</code>. Anything else it does not provide it
-    says so in <code>capabilities</code>, and Caret hides that operation —
-    a dictate-only backend is a complete backend. In the reference
-    backend every operation is <em>capability-routed</em>: speech is
-    transcribed by its own STT lane — local OpenWhisper by default, since
-    no agent runtime has a verified transcription interface — and only
-    then does text reach the agent, which answers Ask and
-    <a href="/cleanup/">cleans up transcripts</a> (a constrained text-only
-    request that hands the transcript over as inert data); images come from
-    the provider you configure, or stay honestly off. With no STT resolved
-    the backend reports <code>"status": "not_ready"</code> rather than
-    pretending to be a Caret backend.
-  </p>
+
+  <h2>Why a live socket</h2>
+  <ul>
+    <li><strong>You see your words as you say them.</strong> Every route
+        streams cumulative partial transcripts while the user speaks —
+        latency the pre-V4 REST upload cycle could not offer.</li>
+    <li><strong>One lifecycle to implement.</strong> The routes differ only
+        in their finalizer and their typed result; the connection handling,
+        audio framing, reliability rules, and error table are identical
+        across all three.</li>
+    <li><strong>Reliability without server state.</strong> The client keeps
+        the audio it captured until a result is in hand; finalize totals
+        prove the server heard everything; idempotent replay on a fresh
+        connection recovers from any dropped transport without double
+        work.</li>
+  </ul>
 
   <div class="card">
     <h3>What the cleanup model is told<span class="pill">caret-cleanup/1</span></h3>
@@ -133,81 +122,49 @@
       Cleanup is the one place a backend hands the user's own words to a
       language model, so the wording is published rather than buried in
       source: the transcript travels as inert data, meaning is preserved
-      completely, only formatting changes, dictated code and URLs come back
-      without Markdown fences, and a failed cleanup returns the raw
-      transcript. Two implementations can prove they agree on a digest
-      instead of a paraphrase.
+      completely, only formatting changes, and a failed cleanup returns
+      the raw transcript. The spec is versioned independently of the
+      protocol and is unchanged in V4 — V4 adds per-operation
+      <a href="/protocol/#7">vocabulary injection</a> into its
+      glossary.
     </p>
     <p><a href="/cleanup/"><strong>Read the cleanup spec →</strong></a> ·
        <a href="/spec/cleanup/v1/prompt.md">prompt.md</a></p>
   </div>
 
-  <h2>One input model</h2>
-  <p>
-    Every operation accepts the same discriminated <code>input</code>
-    object — typed text, or a spoken audio session. Audio is not a second
-    protocol per operation: a spoken Ask opens an ordinary session, uploads
-    ordinary chunks, and then hands the session id to
-    <code>POST /v2/ask</code>.
-  </p>
-  <pre><code>{"input": {"type": "text",    "text": "tell Sam I'm running late"}}
-
-{"input": {"type": "session", "session_id": "sess_9f2c",
-           "client_chunk_count": 4, "client_total_duration_ms": 11200}}</code></pre>
-  <p>
-    There is no finalize endpoint: the operation that names a session
-    atomically seals, transcribes, and consumes it. A session carries
-    exactly one terminal result, so whichever operation consumes it owns
-    it — a second operation on the same session is
-    <code>409 session_conflict</code>.
-  </p>
-
   <h2>Design principles</h2>
   <ul>
-    <li><strong>No privileged server.</strong> The keyboard talks to the base
-        URL and API key you enter in the app. Any server that implements
-        <code>caret/v2</code> works.</li>
-    <li><strong>Capabilities are honest.</strong> Health declares what you
-        actually support, per surface and per input mode. The keyboard hides
-        what you have not enabled rather than failing in the user's hands.</li>
-    <li><strong>Stable error envelope.</strong> Every non-2xx response is
-        <code>{"error": {"code", "message", "retryable"}, "request_id"}</code>
-        with an append-only code list. Clients act on <code>retryable</code>
-        when they meet an unknown code.</li>
-    <li><strong>Idempotency everywhere.</strong> Mutating requests carry a
-        client-generated <code>client_request_id</code>; replays return the
-        original result and never re-run work.</li>
-    <li><strong>Additive evolution.</strong> Unknown JSON fields are ignored on
-        both sides. Breaking changes require a new path version
-        (<code>/v3</code>). <code>caret/v1</code> is deprecated and no longer
-        documented; V2 is the only supported contract.</li>
+    <li><strong>No privileged server.</strong> The keyboard talks to the
+        base URL and credential you enter in the app. Any server that
+        implements <code>caret/v4</code> works.</li>
+    <li><strong>Capabilities are honest.</strong> <code>/health</code>
+        declares what you actually serve, per route and per input mode; the
+        keyboard hides the rest rather than failing in the user's
+        hands.</li>
+    <li><strong>Typed terminal results.</strong> Exactly one
+        <code>result</code> or <code>error</code> per operation, tagged by
+        route, after all partials — the last text the client holds is
+        always authoritative.</li>
+    <li><strong>Stable errors.</strong> An append-only code list with a
+        truthful <code>retryable</code> on every error, mapped to WebSocket
+        close codes.</li>
+    <li><strong>Additive evolution.</strong> Unknown JSON fields are
+        ignored on both sides; breaking changes take a new protocol
+        number, not a silent shape change.</li>
   </ul>
 
-  <h2>Start in two minutes</h2>
+  <h2>Coming from V2 or V3?</h2>
   <p>
-    Clone the public repository, point the backend at the agent you already
-    run, paste the URL and key into Caret, and your keyboard is live:
-  </p>
-  <pre><code>git clone https://github.com/kballenegger/caret-docs.git
-cd caret-docs/reference-backend
-
-export CARET_AGENT=claude-code              # hermes | codex | grokbot | openclaw | custom-http
-python3 -c 'import secrets;print(secrets.token_urlsafe(32))'  # generate a key — copy the output
-export CARET_API_KEYS=paste-the-key-here                      # the same key goes into the Caret app
-python3 -m caret_backend --check
-python3 -m caret_backend --port 8787</code></pre>
-  <p>
-    Then hand the phone a code instead of a 43-character key:
-    <code>python3 -m caret_backend --qr --url https://your-host</code>.
-    <a href="/connect/">The Connect guide</a> covers TLS, per-runtime
-    runbooks, dictation via OpenWhisper, the
-    <a href="/connect/#qr">connection QR</a>, and the compatibility matrix.
-    The machine-readable contract is at
-    <a href="/openapi.yaml"><code>openapi.yaml</code></a>.
+    <code>caret/v2</code> and <code>caret/v3</code> are retired. The
+    <a href="/migration/">migration guide</a> maps every old concept to its
+    V4 replacement and shows how to serve both contracts at one base URL
+    during cutover — the paths do not collide. Everything pre-V4 is
+    preserved, clearly marked, in the <a href="/legacy/">legacy
+    archive</a>.
   </p>
 
   <p class="note">
-    This documentation and the reference implementations are
+    This documentation and the reference material are
     <strong>source-available, not open source</strong>: licensed for
     configuring, running, and extending Caret integrations only. See the
     <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">license</a>.
@@ -219,10 +176,10 @@ python3 -m caret_backend --port 8787</code></pre>
     <span>Caret — the agentic iOS keyboard.</span>
     <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
-    <a href="/connect/">Connect</a>
-    <a href="/your-agent/">Your Agent</a>
-    <a href="/cleanup/">Cleanup</a>
-    <a href="/openapi.yaml">openapi.yaml</a>
+    <a href="/protocol/">Protocol</a>
+    <a href="/reference/">Reference</a>
+    <a href="/migration/">Migration</a>
+    <a href="/legacy/">Legacy archive</a>
   </div>
 </footer>
 </body>

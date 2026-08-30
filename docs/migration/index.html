@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migration — from caret/v2 and v3 to caret/v4</title>
+<meta name="description" content="Compatibility and cutover guidance: how caret/v4 relates to the retired v2 REST and v3 WebSocket contracts, how to run V2 and V4 side by side at one base URL, and how to retire the legacy surface.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <img src="/assets/caret-mark.svg" alt="Caret mark">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/protocol/">Protocol</a>
+      <a href="/reference/">Reference</a>
+      <a href="/migration/" aria-current="page">Migration</a>
+      <a href="/cleanup/">Cleanup</a>
+      <a href="/imagine-references/">Imagine</a>
+      <a href="/legacy/">Legacy</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <p class="kicker">compatibility · cutover</p>
+  <h1>Moving to caret/v4.</h1>
+  <p class="lead">
+    <code>caret/v4</code> replaces both <code>caret/v2</code> (REST,
+    chunked sessions) and <code>caret/v3</code> (the optional live-dictation
+    WebSocket). If you are building something new, ignore this page and
+    implement <a href="/protocol/">V4</a>. If you operate a pre-V4 backend
+    or maintain a client that speaks V2, this is the cutover plan.
+  </p>
+
+  <h2>What actually changed</h2>
+  <table>
+    <tr><th>caret/v2 + v3</th><th>caret/v4</th></tr>
+    <tr><td>REST operations (<code>POST /v2/dictate</code> …) over chunked
+            audio sessions, with V3 live dictation as an optional fast
+            path</td>
+        <td>The live socket <em>is</em> the protocol: three WebSocket routes
+            sharing <a href="/protocol/">one lifecycle</a>, live partials
+            for everyone, no REST session machinery at all.</td></tr>
+    <tr><td>Durability on the server: session directories, cached results,
+            ACK/purge, missing-chunk repair</td>
+        <td>Durability on the client: it keeps the audio and replays the
+            operation on a fresh connection; finalize audio totals prove
+            completeness; <code>client_request_id</code> keeps replays from
+            double-billing.</td></tr>
+    <tr><td>Two-step spoken input (upload session, then call the
+            operation)</td>
+        <td>One step: connect to the route, stream, finalize.</td></tr>
+    <tr><td>Untyped result objects, per-endpoint shapes</td>
+        <td>Typed terminal results: <code>"dictation"</code>,
+            <code>"message"</code>, <code>"image"</code> — one per
+            route.</td></tr>
+    <tr><td><code>GET /v2/health</code>, <code>"contract": "caret/v2"</code></td>
+        <td><code>GET /health</code>, <code>"protocol": "caret/v4"</code>,
+            with per-route <code>partials</code>/<code>text_input</code>
+            capabilities and advertised limits.</td></tr>
+    <tr><td>Vocabulary: none (glossary fixed in the cleanup spec)</td>
+        <td><a href="/protocol/#7">Per-operation vocabulary injection</a>
+            into STT biasing and the cleanup glossary.</td></tr>
+  </table>
+  <p>What did <em>not</em> change: TLS-only, bearer presentation with the
+     backend owning the credential scheme, PCM16/16 kHz/mono audio,
+     dictate mandatory with capabilities honest, append-only error codes
+     with a truthful <code>retryable</code>, unknown JSON fields ignored,
+     and <a href="/cleanup/"><code>caret-cleanup/1</code></a> as the
+     cleanup wording — that spec is versioned independently and is
+     untouched by V4.</p>
+
+  <h2>Side-by-side serving</h2>
+  <p>
+    V4 routes are unversioned (<code>/health</code>, <code>/dictate</code>,
+    <code>/ask</code>, <code>/imagine</code>); every pre-V4 path carried a
+    <code>/v2/</code> or <code>/v3/</code> prefix. They cannot collide, so
+    one base URL can serve both contracts during a cutover — a reverse
+    proxy that routes by path prefix is enough:
+  </p>
+  <pre><code>/health, /dictate, /ask, /imagine   →  V4 backend
+/v2/*, /v3/*                        →  legacy backend (archived)</code></pre>
+  <p>
+    Clients decide by discovery, not guessing: a V4 client calls
+    <code>GET /health</code> and proceeds only on
+    <code>"protocol": "caret/v4"</code>; a V2 client calls
+    <code>GET /v2/health</code> and never sees the V4 surface.
+  </p>
+
+  <h2>Cutover: backend operators</h2>
+  <ol>
+    <li><strong>Stand up V4</strong> against
+        <a href="/protocol/">the protocol page</a> (the
+        <a href="/reference/">public reference implementation</a> is a
+        design today, so this is an implementation task, not an
+        install).</li>
+    <li><strong>Verify with a real client</strong>: current Caret releases
+        speak V4; the §11 conformance checklist is the manual harness until
+        the runnable checker ships.</li>
+    <li><strong>Keep <code>/v2/</code> alive only while a pre-V4 client
+        still uses it.</strong> If your only client is a current Caret
+        build, skip straight to V4-only.</li>
+    <li><strong>Retire the legacy surface</strong>: stop routing
+        <code>/v2/*</code>, decommission the old backend, and rotate any
+        credentials that were shared between the two.</li>
+  </ol>
+
+  <h2>Cutover: client developers</h2>
+  <ol>
+    <li>Implement V4 only — do not add V2 support to a new client. The
+        client-side conformance list is
+        <a href="/protocol/#11">§11 of the protocol</a>.</li>
+    <li>Treat <code>/health</code> without
+        <code>"protocol": "caret/v4"</code> as "not a V4 backend" and say
+        so to the user; do not silently probe <code>/v2/health</code>.</li>
+    <li>Own durability: buffer captured audio until a terminal result is
+        held, replay on transport failure, honor cached replays.</li>
+  </ol>
+
+  <h2>Where the old material lives</h2>
+  <p>
+    Every pre-V4 document is preserved, marked, and indexed at
+    <a href="/legacy/">the legacy archive</a> — the V2 implementation
+    guide, the V3 live-dictation spec, the connect runbooks, the archived
+    <code>openapi.yaml</code>, the V2 reference backend and its packaged
+    integrations. Old URLs redirect there. None of it applies to V4 except
+    as history.
+  </p>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="/">Overview</a>
+    <a href="/protocol/">Protocol</a>
+    <a href="/legacy/">Legacy archive</a>
+  </div>
+</footer>
+</body>
+</html>

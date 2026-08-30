@@ -15,11 +15,12 @@
     <span class="name"><a href="/">Caret Docs</a></span>
     <nav>
       <a href="/">Overview</a>
-      <a href="/connect/">Connect</a>
-      <a href="/your-agent/">Your Agent</a>
+      <a href="/protocol/">Protocol</a>
+      <a href="/reference/">Reference</a>
+      <a href="/migration/">Migration</a>
       <a href="/cleanup/" aria-current="page">Cleanup</a>
       <a href="/imagine-references/">Imagine</a>
-      <a href="https://typewithcaret.com">typewithcaret.com</a>
+      <a href="/legacy/">Legacy</a>
     </nav>
   </div>
 </header>
@@ -48,12 +49,14 @@
 
   <h2>Where it runs</h2>
   <p>
-    <code>POST /v2/dictate</code> transcribes speech and then, unless the
-    request sets <code>"polish": false</code>, runs one cleanup pass over the
-    result. Cleanup is a plain text-in, text-out call: no tools, no browsing,
-    no conversation, no memory of the last dictation. A backend that skips
-    cleanup entirely is still a valid <code>caret/v2</code> backend — it just
-    returns the raw transcript.
+    The <a href="/protocol/">caret/v4</a> <code>/dictate</code> route
+    transcribes speech and then, unless the finalizer sets
+    <code>"polish": false</code>, runs one cleanup pass over the result.
+    Cleanup is a plain text-in, text-out call: no tools, no browsing, no
+    conversation, no memory of the last dictation. A cleanup that fails
+    returns the raw transcript, never an error — and the spec itself is
+    versioned independently of the protocol (<code>caret-cleanup/1</code>
+    served V2 unchanged and serves V4 unchanged).
   </p>
 
   <h2>The transcript is inert data</h2>
@@ -184,34 +187,19 @@ OpenClaw · OpenWhisper · Tailscale · QR code · API key</code></pre>
     an actual carrot stays a carrot. A glossary never inserts a term the
     speaker did not say.
   </p>
-  <p>Your deployment supplies its own vocabulary instead:</p>
-  <table>
-    <tr><th>Variable</th><th>Default</th><th>Effect</th></tr>
-    <tr>
-      <td><code>CARET_CLEANUP_GLOSSARY</code></td>
-      <td><code>on</code></td>
-      <td><code>off</code> sends the prompt with no glossary section at
-          all.</td>
-    </tr>
-    <tr>
-      <td><code>CARET_CLEANUP_GLOSSARY_PATH</code></td>
-      <td><em>(none)</em></td>
-      <td>A JSON file in the same shape as
-          <a href="/spec/cleanup/v1/glossary.json"><code>glossary.json</code></a>.
-          It <strong>replaces</strong> the defaults.</td>
-    </tr>
-    <tr>
-      <td><code>CARET_CLEANUP_SPEC_DIR</code></td>
-      <td>the bundled spec</td>
-      <td>Point the backend at its own vendored copy of these files.</td>
-    </tr>
-  </table>
   <p>
-    Replacing rather than extending is deliberate: whatever the model sees is
-    always exactly one list a human can read in one sitting. A deployment
-    that wants both copies the defaults into its own file. If you serve more
-    than one person, keep per-user vocabulary out of configuration and pass
-    it per request — a shared glossary file is shared with everybody.
+    A deployment may replace the default glossary with its own — replacing
+    rather than extending, so whatever the model sees is always exactly one
+    list a human can read in one sitting. How a backend is configured with
+    that file is the backend's business, not this spec's.
+  </p>
+  <p>
+    Per-user terms travel with the request instead:
+    <a href="/protocol/#7">V4 vocabulary injection</a> puts a term list in
+    every operation's <code>start</code> frame, and a backend advertising
+    the capability merges those terms into the glossary for that one
+    cleanup pass (and biases its recognizer with them). Vocabulary is user
+    content — never move it into shared configuration, never log it.
   </p>
 
   <h2>Cleanup is best-effort</h2>
@@ -241,13 +229,11 @@ OpenClaw · OpenWhisper · Tailscale · QR code · API key</code></pre>
         instead of silently changing what every dictation is told.</li>
   </ol>
   <p>
-    Report the digest, never the prompt, on any health or status surface.
-    The reference backend does exactly that — <code>GET /v2/health</code>
-    names the wording without disclosing a line of it:
+    Report the digest, never the prompt, on any health or status surface —
+    <code>GET /health</code> is anonymous, so it can name the wording
+    without disclosing a line of it:
   </p>
-  <pre><code>{"routes": {"dictate": {"cleanup": {
-  "route": "agent", "provider": "hermes", "constrained": true,
-  "spec": "caret-cleanup/1 20ab781577580c29", "glossary_terms": 12}}}}</code></pre>
+  <pre><code>{"cleanup": {"spec": "caret-cleanup/1 20ab781577580c29", "glossary_terms": 12}}</code></pre>
   <p>
     If your <code>spec</code> string differs from someone else's, you are
     running different wording — that is the whole point of publishing a
@@ -256,12 +242,11 @@ OpenClaw · OpenWhisper · Tailscale · QR code · API key</code></pre>
 
   <h2>Where to go next</h2>
   <p>
-    <a href="/your-agent/">The implementation guide</a> has the Dictate
-    request and response shapes, including <code>polish</code>.
-    <a href="/connect/">Connect</a> covers deploying the reference backend
-    against the agent you already run — it ships this spec and these
-    variables already wired up. The machine-readable contract is at
-    <a href="/openapi.yaml"><code>openapi.yaml</code></a>.
+    <a href="/protocol/">The caret/v4 protocol</a> has the
+    <code>/dictate</code> lifecycle, the <code>polish</code> finalizer
+    field, and the vocabulary rules. The
+    <a href="/reference/">reference implementation design</a> pins how the
+    public backend will consume this spec as data when it lands.
   </p>
 </main>
 
@@ -271,7 +256,7 @@ OpenClaw · OpenWhisper · Tailscale · QR code · API key</code></pre>
     <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
     <a href="/">Overview</a>
-    <a href="/your-agent/">Implementation guide</a>
+    <a href="/protocol/">Protocol</a>
     <a href="/spec/cleanup/v1/prompt.md">caret-cleanup/1</a>
   </div>
 </footer>

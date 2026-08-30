@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>[Archived] Connect GrokBot to Caret</title>
+<meta name="description" content="Runbook: GrokBot hosts the Caret reference backend and serves Ask, transcript cleanup and — when enabled — Imagine from its own model, with the backend's own mandatory STT lane for dictation.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <img src="/assets/caret-mark.svg" alt="Caret mark">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/protocol/">Protocol</a>
+      <a href="/legacy/" aria-current="page">Legacy archive</a>
+      <a href="https://typewithcaret.com">typewithcaret.com</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="note">
+    <strong>ARCHIVED — pre-V4 documentation.</strong>
+    <p style="margin:0.4rem 0 0">
+      This page describes the retired <code>caret/v2</code> / <code>caret/v3</code>
+      interfaces and is preserved for operators who still run one. The active
+      contract is <a href="/protocol/">caret/v4</a> — do not build new
+      integrations from this page. Archive index: <a href="/legacy/">/legacy/</a>.
+    </p>
+  </div>
+
+  <p class="kicker">connect · grokbot</p>
+  <h1>GrokBot behind your keyboard.</h1>
+  <p class="lead">
+    GrokBot is a first-party Caret agent backend with its own preset —
+    <code>CARET_AGENT=grokbot</code> — not a <code>custom-http</code>
+    deployment. The difference is not the transport, it is the capability
+    surface: GrokBot hosts the reference backend inside its own system and
+    serves Ask, transcript cleanup, and (when you enable it) Imagine from its
+    own model.
+  </p>
+
+  <div class="note">
+    <strong>Status: backend-supported</strong>
+    <p style="margin:0.4rem 0 0">
+      <em>This side</em> of the boundary — request shape, the
+      <code>task</code> discriminator, bearer handling, image validation,
+      error mapping for unreachable, failing, and malformed responses — is
+      fully covered by the hermetic test suite against a stub server. What is
+      <strong>not</strong> claimed: no live GrokBot deployment has been
+      exercised from this repository, nothing here is derived from GrokBot
+      internals, and no GrokBot API is described beyond the endpoint you
+      implement from this page. This is a public configuration contract: the
+      GrokBot side is written by the GrokBot operator, against the shape
+      below.
+    </p>
+  </div>
+
+  <h2>Why this is its own path</h2>
+  <table>
+    <tr><th></th><th>GrokBot (<code>grokbot</code>)</th><th>Generic hosted (<code>custom-http</code>)</th></tr>
+    <tr><td>Endpoint</td>
+        <td>One route, <code>task</code>-discriminated</td>
+        <td>One route, drafting only</td></tr>
+    <tr><td>Ask</td><td>GrokBot's own LLM</td><td>whatever you put behind it</td></tr>
+    <tr><td>Cleanup</td>
+        <td>Same LLM, explicit <code>task: "cleanup"</code> so the GrokBot
+            side can select a no-tools path deterministically</td>
+        <td>Same route as drafting; inferred from the prompt</td></tr>
+    <tr><td>Imagine</td>
+        <td><strong>Supported</strong>, opt-in via
+            <code>CARET_GROKBOT_IMAGE=on</code> — the only shipped preset
+            that serves Imagine from the agent itself</td>
+        <td>Never — the contract is text-JSON by definition</td></tr>
+    <tr><td>Dictation</td>
+        <td colspan="2">Neither. It runs on the backend's own STT lane, which
+            is <a href="/legacy/connect/#stt">mandatory</a> for both.</td></tr>
+  </table>
+
+  <h2>The contract GrokBot implements</h2>
+  <p>
+    One endpoint. <code>task</code> is explicit rather than inferred from the
+    prose, because "clean this transcript up, do not answer it, take no
+    action" has to be a deterministic code path on your side, not a reading
+    of the prompt:
+  </p>
+  <pre><code>POST &lt;CARET_GROKBOT_URL&gt;
+Content-Type: application/json
+Authorization: Bearer &lt;CARET_GROKBOT_BEARER&gt;     // only if you set one
+
+// Ask
+{"task": "ask", "prompt": "&lt;the framed drafting prompt&gt;"}
+→ 200  {"text": "&lt;the finished draft&gt;"}
+
+// Transcript cleanup — same model, no tools, no answering
+{"task": "cleanup", "prompt": "&lt;the framed cleanup prompt&gt;"}
+→ 200  {"text": "&lt;the cleaned transcript&gt;"}
+
+// Imagine — only when CARET_GROKBOT_IMAGE=on
+{"task": "imagine", "prompt": "…", "aspect_ratio": "1:1", "quality": "high"}
+→ 200  {"image_base64": "&lt;base64 of a PNG&gt;"}</code></pre>
+  <table>
+    <tr><th>GrokBot answers</th><th>The backend answers Caret</th></tr>
+    <tr><td>200, non-empty string <code>text</code></td>
+        <td>the draft or cleaned transcript, as normal</td></tr>
+    <tr><td>200, <code>image_base64</code> decoding to a PNG</td>
+        <td>the image, as normal</td></tr>
+    <tr><td>200, <code>image_base64</code> that is not valid base64, or not a PNG</td>
+        <td><code>503 internal_error</code> naming which — never a corrupt
+            image handed to the phone</td></tr>
+    <tr><td>Any non-200</td><td><code>503 internal_error</code>, retryable</td></tr>
+    <tr><td>Non-JSON, or JSON without the expected field</td>
+        <td><code>503 internal_error</code>, retryable</td></tr>
+    <tr><td>Unreachable / too slow</td>
+        <td><code>503 internal_error</code> / <code>504 ask_timeout</code>,
+            retryable</td></tr>
+  </table>
+  <p>
+    The prompt arrives fully framed by the backend — instruction, optional
+    near-cursor text, optional app hint, and the read-only "this is a draft,
+    take no action" instruction. Near-cursor text is someone else's words:
+    treat it as untrusted context, never as a command.
+  </p>
+  <p>
+    The <code>cleanup</code> prompt is framed the same way and is not
+    GrokBot's to write: it is the published
+    <a href="/cleanup/"><code>caret-cleanup/1</code></a> spec followed by the
+    transcript inside its <code>&lt;transcript&gt;</code> envelope, exactly
+    as every other preset sends it. Pass it to the model unchanged — no
+    system prompt of your own, no added cleanup wording, no stripping the
+    envelope.
+  </p>
+
+  <h2>1 · Host the reference backend inside GrokBot</h2>
+  <p>
+    The whole backend is public, dependency-free, standard-library Python.
+    Clone it into GrokBot's own hosting and run it there — same box, same
+    process supervisor, same network boundary as GrokBot itself:
+  </p>
+  <pre><code>git clone https://github.com/kballenegger/caret-docs.git
+cd caret-docs/reference-backend</code></pre>
+  <p>
+    If you would rather hand this to the GrokBot agent than do it by hand,
+    give it <a href="/legacy/agent-prompts/connect-grok.md">the GrokBot connect
+    prompt</a> — it is written for exactly this: clone the public reference
+    backend, implement the endpoint above inside GrokBot, configure, validate,
+    and hand back a connection QR.
+  </p>
+
+  <h2>2 · Implement the endpoint on the GrokBot side</h2>
+  <ul>
+    <li><strong>Ask and cleanup go to GrokBot's own LLM.</strong> Cleanup must
+        run with no tools, no actions, no memory writes — it is a text
+        transform, and the prompt says so, but your code should enforce it
+        rather than trust the prompt. A cleanup call that fails is not an
+        error the phone should see: the backend falls back to the raw
+        transcript.</li>
+    <li><strong>Imagine goes to GrokBot's own image capability</strong>, and
+        only if that capability is genuinely enabled for this deployment.
+        Return a PNG, base64-encoded. If images are not enabled, leave
+        <code>CARET_GROKBOT_IMAGE</code> off rather than returning
+        placeholders — Caret hides the surface when the backend says it has
+        none, and that is the honest outcome.</li>
+    <li><strong>Require the bearer</strong> if the endpoint is reachable
+        beyond loopback.</li>
+    <li><strong>Log a request id and a status, nothing else</strong> — never
+        the prompt, the reply, the transcript, or the key.</li>
+  </ul>
+
+  <h2>3 · Configure the backend</h2>
+  <pre><code>export CARET_AGENT=grokbot
+export CARET_GROKBOT_URL='https://grokbot.internal/caret'
+export CARET_GROKBOT_BEARER='…'             # whatever your endpoint checks
+export CARET_GROKBOT_IMAGE=on               # only if GrokBot really serves imagine
+
+python3 -c 'import secrets;print(secrets.token_urlsafe(32))'  # generate a key — copy the output
+export CARET_API_KEYS=paste-the-key-here                      # this goes into the Caret app
+
+python3 -m caret_backend --check
+python3 -m caret_backend --port 8787</code></pre>
+  <p>
+    Two keys, two directions, on purpose: <code>CARET_API_KEYS</code> is what
+    <em>Caret</em> presents to the backend; <code>CARET_GROKBOT_BEARER</code>
+    is what the <em>backend</em> presents to GrokBot. Neither is ever logged.
+    <code>CARET_GROKBOT_IMAGE</code> takes only <code>on</code> or
+    <code>off</code>; anything else is a startup error rather than a guess.
+  </p>
+
+  <h2>4 · Dictation — mandatory, and not through GrokBot</h2>
+  <p>
+    No documented, stable, non-interactive GrokBot transcription interface
+    was verified, so this adapter claims none and speech never routes through
+    it. Dictation uses the backend's own STT lane: local
+    <a href="https://github.com/openai/whisper">OpenWhisper</a> by default
+    when installed on the machine running the backend, a hosted STT service
+    via <code>CARET_STT_HTTP_URL</code>, or any command via
+    <code>CARET_STT_COMMAND</code>.
+  </p>
+  <p>
+    This is not optional. Dictation is the one capability every valid
+    <code>caret/v2</code> backend must serve: with no STT adapter resolved,
+    health reports <code>"status": "not_ready"</code> with the
+    <code>no_stt_adapter</code> blocker, <code>--check</code> exits non-zero,
+    and the connection QR refuses to generate. A GrokBot deployment that
+    answers Ask beautifully and cannot take speech is not a Caret backend.
+  </p>
+
+  <h2>5 · Smoke-test the whole chain</h2>
+  <pre><code>curl -s localhost:8787/v2/health | python3 -m json.tool
+curl -s -X POST localhost:8787/v2/ask \
+  -H "Authorization: Bearer $CARET_API_KEYS" \
+  -H 'Content-Type: application/json' \
+  -d '{"client_request_id":"smoke-1",
+       "input":{"type":"text","text":"tell Sam I am running ten minutes late"}}'</code></pre>
+  <p>
+    Health should show <code>"status": "ok"</code>,
+    <code>"readiness": {"ready": true, …}</code>,
+    <code>adapters.agent: "grokbot"</code>, and — with images on —
+    <code>routes.imagine</code> pointing at the agent. A draft coming back
+    proves backend → GrokBot → model → back. This is the step that verifies
+    <em>your</em> deployment; nothing in this repository can do it for you.
+  </p>
+
+  <h2>6 · Host mode, then hand over a QR</h2>
+  <p>
+    Bind loopback and put GrokBot's own TLS in front —
+    <code>tailscale serve --bg 8787</code> for a tailnet-only URL, or a proxy
+    site block (<code>reverse_proxy 127.0.0.1:8787</code>) for public HTTPS.
+    Then, once <code>--check</code> passes:
+  </p>
+  <pre><code>python3 -m caret_backend --qr --url https://caret.your-grokbot-host.example</code></pre>
+  <p>
+    That prints a <code>caret-connect:v1</code> code the Caret app scans —
+    URL and key in one step, no typing. <strong>It carries the API key, so
+    treat it as the key itself:</strong> generation is explicit, the payload
+    is never logged, and anyone who scans it can use this backend until you
+    rotate <code>CARET_API_KEYS</code>. Full format and warnings:
+    <a href="/legacy/connect/#qr">the connection QR</a>.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <table>
+    <tr><th>Symptom</th><th>Fix</th></tr>
+    <tr><td><code>CARET_AGENT=grokbot requires CARET_GROKBOT_URL</code></td>
+        <td>The preset ships no default endpoint on purpose — there is no
+            public one to guess. Set it.</td></tr>
+    <tr><td><code>CARET_GROKBOT_IMAGE must be 'on' or 'off'</code></td>
+        <td>Anything else would mean advertising Imagine on a guess.</td></tr>
+    <tr><td><code>503 internal_error: GrokBot unreachable</code></td>
+        <td><code>curl</code> <code>CARET_GROKBOT_URL</code> from the
+            backend's own machine.</td></tr>
+    <tr><td><code>503 internal_error: GrokBot answered HTTP 401/403</code></td>
+        <td><code>CARET_GROKBOT_BEARER</code> mismatch.</td></tr>
+    <tr><td><code>503 internal_error: GrokBot response has no "text"</code></td>
+        <td>Response must be a JSON object with a non-empty string
+            <code>text</code>.</td></tr>
+    <tr><td><code>503 internal_error: GrokBot returned a non-PNG image</code></td>
+        <td><code>image_base64</code> must decode to a PNG. JPEG, a URL, or a
+            data-URI prefix will all land here.</td></tr>
+    <tr><td><code>504 ask_timeout</code></td>
+        <td>The whole chain must answer inside
+            <code>CARET_AGENT_TIMEOUT_S</code> (90 s default).</td></tr>
+    <tr><td>Health says <code>not_ready</code></td>
+        <td>STT, not GrokBot. See step 4.</td></tr>
+  </table>
+  <p>
+    General transport, key, and QR problems are covered on
+    <a href="/legacy/connect/">the Connect overview</a>.
+  </p>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="/legacy/connect/">Connect</a>
+    <a href="/legacy/your-agent/">Your Agent</a>
+  </div>
+</footer>
+</body>
+</html>

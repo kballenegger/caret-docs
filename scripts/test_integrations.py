@@ -1,7 +1,9 @@
-"""Hermetic validation of the packaged integrations.
+"""Hermetic validation of the archived packaged integrations.
 
-Manifests must parse and be internally consistent; skills must have
-well-formed frontmatter. Nothing here executes Claude Code or Hermes.
+The integrations moved to legacy/ in the V4 cutover; archived means
+frozen, not broken, so their manifests must still parse and stay
+internally consistent, and skills must keep well-formed frontmatter.
+Nothing here executes Claude Code or Hermes.
 """
 from __future__ import annotations
 
@@ -10,9 +12,9 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
-CLAUDE_PLUGIN_DIR = REPO_ROOT / "integrations" / "claude-code" / "caret-connect"
-HERMES_SKILL = REPO_ROOT / "integrations" / "hermes" / "caret-connect" / "SKILL.md"
+MARKETPLACE = REPO_ROOT / "legacy" / "claude-plugin" / "marketplace.json"
+CLAUDE_PLUGIN_DIR = REPO_ROOT / "legacy" / "integrations" / "claude-code" / "caret-connect"
+HERMES_SKILL = REPO_ROOT / "legacy" / "integrations" / "hermes" / "caret-connect" / "SKILL.md"
 
 
 def read_frontmatter(path: Path) -> dict:
@@ -40,7 +42,7 @@ class MarketplaceTests(unittest.TestCase):
 
     def test_every_plugin_source_exists_and_is_a_plugin(self):
         for plugin in self.manifest["plugins"]:
-            source = (REPO_ROOT / plugin["source"]).resolve()
+            source = (MARKETPLACE.parent / plugin["source"]).resolve()
             self.assertTrue(source.is_dir(), f"missing plugin source {plugin['source']}")
             self.assertTrue((source / ".claude-plugin" / "plugin.json").is_file())
 

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Legacy archive — pre-V4 Caret documentation</title>
+<meta name="description" content="Archived documentation for the retired caret/v2 REST contract and caret/v3 live-dictation WebSocket. Preserved for operators still running a pre-V4 backend. The active contract is caret/v4.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <img src="/assets/caret-mark.svg" alt="Caret mark">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/protocol/">Protocol</a>
+      <a href="/legacy/" aria-current="page">Legacy archive</a>
+      <a href="https://typewithcaret.com">typewithcaret.com</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <p class="kicker">ARCHIVED · caret/v2 · caret/v3</p>
+  <h1>The pre-V4 archive.</h1>
+  <p class="lead">
+    Everything on this page is retired. It documents
+    <code>caret/v2</code> (the REST contract) and <code>caret/v3</code>
+    (the optional live-dictation WebSocket), which the
+    <a href="/protocol/">caret/v4 protocol</a> replaced. The pages are
+    preserved for operators who still run a pre-V4 backend and for the
+    historical record — do not build anything new from them.
+  </p>
+
+  <div class="note">
+    <strong>Building something?</strong>
+    <p style="margin:0.4rem 0 0">
+      Start at the <a href="/">overview</a>, implement the
+      <a href="/protocol/">caret/v4 protocol</a>, and read the
+      <a href="/migration/">migration guide</a> if you operate a V2/V3
+      backend today.
+    </p>
+  </div>
+
+  <h2>Archived pages</h2>
+  <table>
+    <tr><th>Page</th><th>What it was</th></tr>
+    <tr><td><a href="/legacy/your-agent/">Implementation guide</a></td>
+        <td>The full <code>caret/v2</code> backend contract: REST endpoints,
+            chunked audio sessions, atomic consumption, errors.</td></tr>
+    <tr><td><a href="/legacy/live-dictation/">Live dictation</a></td>
+        <td>The optional <code>caret/v3</code> WebSocket — the direct
+            ancestor of the V4 lifecycle, dictation-only.</td></tr>
+    <tr><td><a href="/legacy/connect/">Connect runbooks</a></td>
+        <td>Deploying the V2 reference backend in front of Claude Code,
+            Codex, Hermes, GrokBot, OpenClaw, or a custom HTTP agent.</td></tr>
+    <tr><td><a href="/legacy/openapi.yaml">openapi.yaml</a></td>
+        <td>The machine-readable <code>caret/v2</code> contract.</td></tr>
+    <tr><td><a href="/legacy/agent-prompts/connect-caret.md">Agent prompts</a></td>
+        <td>Prompts a coding agent followed to connect
+            (<a href="/legacy/agent-prompts/connect-caret.md">connect-caret.md</a>,
+            <a href="/legacy/agent-prompts/connect-grok.md">connect-grok.md</a>) or
+            implement
+            (<a href="/legacy/agent-prompts/implement-caret-backend.md">implement-caret-backend.md</a>)
+            a V2 backend.</td></tr>
+    <tr><td><a href="https://github.com/kballenegger/caret-docs/tree/main/legacy">legacy/ in the repository</a></td>
+        <td>The V2 reference backend and its conformance checker, the
+            packaged Claude Code plugin and Hermes skill, and the archived
+            marketplace manifest — moved intact, with history.</td></tr>
+  </table>
+
+  <h2>What replaced what</h2>
+  <table>
+    <tr><th>Pre-V4</th><th>In caret/v4</th></tr>
+    <tr><td><code>POST /v2/dictate</code> + chunked REST sessions</td>
+        <td>The <code>/dictate</code> WebSocket route — live partials on
+            every backend, one typed terminal result.</td></tr>
+    <tr><td><code>POST /v2/ask</code>, <code>POST /v2/imagine</code></td>
+        <td>The <code>/ask</code> and <code>/imagine</code> WebSocket routes,
+            sharing the same lifecycle.</td></tr>
+    <tr><td><code>caret/v3</code> live dictation (optional fast path)</td>
+        <td>Promoted to the one and only transport, generalized to all
+            three operations.</td></tr>
+    <tr><td><code>GET /v2/health</code></td>
+        <td><code>GET /health</code> with <code>"protocol": "caret/v4"</code>.</td></tr>
+    <tr><td>Recovery via REST session replay</td>
+        <td>Recovery via idempotent replay on a fresh connection —
+            the client keeps the audio.</td></tr>
+  </table>
+  <p>
+    The <a href="/migration/">migration guide</a> covers running V2 and V4
+    side by side during a cutover; the paths do not collide.
+  </p>
+
+  <h2>Status of the archived code</h2>
+  <p>
+    The <code>caret/v2</code> reference backend under
+    <code>legacy/reference-backend/</code> still runs and its hermetic test
+    suite still passes in <code>make test</code> — archived means
+    unsupported and frozen, not broken. No new features will land there,
+    and it will not learn V4.
+  </p>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="/">Overview</a>
+    <a href="/protocol/">Protocol</a>
+    <a href="/migration/">Migration</a>
+  </div>
+</footer>
+</body>
+</html>

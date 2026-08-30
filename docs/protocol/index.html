@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The caret/v4 protocol — any client, any backend</title>
+<meta name="description" content="The normative caret/v4 contract: one base URL serving the /dictate, /ask, and /imagine WebSocket routes over a shared reliable live-audio lifecycle, per-route finalizers, typed terminal results, health and capability discovery, backend-owned auth, and vocabulary injection.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <img src="/assets/caret-mark.svg" alt="Caret mark">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/protocol/" aria-current="page">Protocol</a>
+      <a href="/reference/">Reference</a>
+      <a href="/migration/">Migration</a>
+      <a href="/cleanup/">Cleanup</a>
+      <a href="/imagine-references/">Imagine</a>
+      <a href="/legacy/">Legacy</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <p class="kicker">caret/v4 · normative · any client, any backend</p>
+  <h1>The caret/v4 protocol.</h1>
+  <p class="lead">
+    One base URL. Three WebSocket routes — <code>/dictate</code>,
+    <code>/ask</code>, <code>/imagine</code> — that share a single reliable
+    live-audio lifecycle and differ only in their finalizer and their typed
+    terminal result. One anonymous <code>GET /health</code> that says who
+    you are and what you can do. This page is the contract: every MUST on
+    it binds both sides, and nothing off it does.
+  </p>
+
+  <div class="note">
+    <strong>Any client, any backend.</strong>
+    <p style="margin:0.4rem 0 0">
+      The protocol has no privileged party. The Caret iOS keyboard is one
+      client; a backend is anything that serves these routes — your agent,
+      your model, your machine, any language. Two independent
+      implementations that both conform will interoperate without ever
+      having met. Nothing in the contract requires Caret's own
+      infrastructure, an account, or a relay.
+    </p>
+  </div>
+
+  <p class="note">
+    <code>caret/v2</code> and <code>caret/v3</code> are retired and live in
+    the <a href="/legacy/">legacy archive</a>. V4 is the only active
+    contract. Operators of pre-V4 backends: see
+    <a href="/migration/">migration and cutover</a>.
+  </p>
+
+  <h2>1 · Ground rules</h2>
+  <table>
+    <tr><th>Rule</th><th>Detail</th></tr>
+    <tr><td>Base URL</td>
+        <td>Whatever the user configures in the client. Routes are appended
+            verbatim: <code>https://host/caret</code> means
+            <code>https://host/caret/health</code> and
+            <code>wss://host/caret/dictate</code>.</td></tr>
+    <tr><td>Transport</td>
+        <td>TLS is required: <code>https://</code> for health,
+            <code>wss://</code> for the operation routes. Terminate TLS in a
+            reverse proxy or private tunnel if you like; plain
+            <code>http://</code>/<code>ws://</code> is refused by
+            clients.</td></tr>
+    <tr><td>Versioning</td>
+        <td>The version is in-band, not in the path: health reports
+            <code>"protocol": "caret/v4"</code> and every <code>start</code>
+            frame carries <code>"protocol": 4</code>. Additive changes keep
+            <code>4</code>; breaking changes become <code>5</code>. Both
+            sides MUST ignore JSON fields they do not recognize. (Pre-V4
+            contracts used <code>/v2/</code>- and <code>/v3/</code>-prefixed
+            paths, so a backend can serve V4 and a legacy contract at one
+            base URL during <a href="/migration/">cutover</a> without
+            collision.)</td></tr>
+    <tr><td>Frames</td>
+        <td>Control messages are WebSocket text frames containing one JSON
+            object. Audio is binary frames. Nothing else appears on the
+            socket.</td></tr>
+    <tr><td>Audio format</td>
+        <td>PCM16 little-endian, 16 kHz, mono — the only codec in V4.</td></tr>
+    <tr><td>Correlation</td>
+        <td>The server assigns an <code>op_id</code> per operation and a
+            <code>request_id</code> per terminal answer; both appear in every
+            event that has them. Log ids, counts, and timings — never
+            transcript, audio, or vocabulary content.</td></tr>
+  </table>
+
+  <h2>2 · Health and capability discovery</h2>
+  <p class="endpoint"><span class="method">GET</span> /health — HTTPS, no auth required</p>
+  <p>
+    The only non-WebSocket surface, and the only anonymous one: a user
+    pasting a URL needs to learn whether it is a Caret backend before they
+    have a credential. Clients call it on every settings save and
+    periodically in use.
+  </p>
+  <pre><code>{
+  "protocol": "caret/v4",
+  "status": "ok",
+  "service": "my-backend",
+  "version": "1.0.0",
+  "time": "2026-08-30T09:00:00Z",
+  "auth": {"presented": true, "valid": true},
+  "capabilities": {
+    "dictate": true,
+    "ask": true,
+    "imagine": false,
+    "text_input": {"dictate": true, "ask": true, "imagine": true},
+    "partials":   {"dictate": true, "ask": true, "imagine": true},
+    "vocabulary": true
+  },
+  "limits": {
+    "max_audio_seconds": 600,
+    "max_frame_bytes": 524288,
+    "max_text_chars": 4000,
+    "max_vocabulary_entries": 200
+  },
+  "blockers": []
+}</code></pre>
+  <ul>
+    <li><code>protocol</code> MUST be exactly <code>"caret/v4"</code> —
+        it is how a client recognizes a V4 backend at an arbitrary URL.</li>
+    <li><code>status</code> is <code>ok</code>, <code>degraded</code>
+        (reachable but impaired — clients show a warning, not a failure), or
+        <code>not_ready</code> (not currently a usable backend).</li>
+    <li><strong>Dictate is mandatory.</strong> A backend that cannot take
+        speech MUST report <code>"dictate": false</code> <em>and</em>
+        <code>"status": "not_ready"</code>, with a machine-readable reason in
+        <code>blockers</code> (<code>[{"code": "no_stt", "message": "…"}]</code>).
+        Ask and Imagine are optional; report them honestly and clients hide
+        what you do not serve. A dictate-only backend is a complete
+        backend.</li>
+    <li><code>capabilities.partials</code> declares, per route, whether live
+        partial transcripts are pushed while the user speaks. Backends
+        SHOULD support partials on <code>/dictate</code>; a buffered-only
+        backend is conforming but the client will not render live
+        text.</li>
+    <li><code>capabilities.text_input</code> declares, per route, whether
+        <code>input.type: "text"</code> is accepted. Audio input is implied
+        by the capability itself.</li>
+    <li><code>auth.presented</code>/<code>auth.valid</code>: if the client
+        sent <code>Authorization</code>, validate it and report the result so
+        a settings screen can tell "wrong key" from "wrong URL". With no
+        header: <code>{"presented": false, "valid": null}</code>.</li>
+    <li><code>limits</code> is optional; absent fields mean the defaults
+        shown above. Clients MUST respect advertised limits.</li>
+  </ul>
+
+  <h2>3 · Backend-owned auth</h2>
+  <p>
+    The backend owns the credential boundary. It decides what a credential
+    is, how it is issued, rotated, and revoked; the protocol only fixes how
+    one is <em>presented</em>: an opaque bearer string on the WebSocket
+    upgrade request (and optionally on <code>/health</code> for the
+    <code>auth</code> report).
+  </p>
+  <pre><code>GET /dictate HTTP/1.1
+Upgrade: websocket
+Authorization: Bearer &lt;credential&gt;</code></pre>
+  <ul>
+    <li>The credential is opaque to the client and to this contract: an API
+        key, a signed token, anything. Clients store it and echo it,
+        nothing more.</li>
+    <li>Validate before completing the operation: an invalid or missing
+        credential gets the <code>unauthorized</code> error event and close
+        code 4401. Backends MAY refuse the upgrade outright with HTTP 401
+        instead; clients MUST handle both.</li>
+    <li>Compare in constant time. Never log the credential — log the
+        <code>op_id</code>.</li>
+    <li>Fail closed: a backend with no credentials configured rejects every
+        operation rather than serving everyone.</li>
+    <li>One credential per device keeps revocation one string away.</li>
+  </ul>
+
+  <h2>4 · The shared live-audio lifecycle</h2>
+  <p>
+    All three routes speak the same lifecycle; a client implements it once.
+    The route determines what the operation <em>means</em>, the finalizer
+    carries the route's parameters (§5), and the terminal result is typed
+    per route (§6). Everything in this section applies identically to
+    <code>/dictate</code>, <code>/ask</code>, and <code>/imagine</code>.
+  </p>
+  <pre><code>client                                  server
+──────────────────────────────────────────────────────────
+open wss://…/dictate  (Bearer auth) ──▶
+text  {"type":"start", …}           ──▶
+                                    ◀── {"event":"ready", …}
+binary audio frame                  ──▶
+binary audio frame                  ──▶ ◀── {"event":"partial", …}
+binary audio frame                  ──▶ ◀── {"event":"partial", …}
+text  {"type":"finalize", …}        ──▶
+                                    ◀── {"event":"progress", …}   (keep-alive)
+                                    ◀── {"event":"result", …}     (exactly one)
+                                    ◀── close 1000</code></pre>
+
+  <h3>start — first frame, both input modes</h3>
+  <p>
+    The client MUST send <code>start</code> within 10 seconds of the
+    upgrade. It is identical on every route:
+  </p>
+  <pre><code>{
+  "type": "start",
+  "protocol": 4,
+  "client_request_id": "A17C…",        // required, ≤128 chars — idempotency key
+  "input": {"type": "audio", "codec": "pcm16",
+            "sample_rate_hz": 16000, "channels": 1},
+  "vocabulary": ["Miren", "Kubernetes", "Sagrada Família"],  // optional, §7
+  "language_hint": "en-US",            // optional, ≤16 chars
+  "app_hint": "com.apple.MobileSMS"    // optional, ≤200 chars, advisory
+}</code></pre>
+  <p>
+    <code>input</code> is discriminated, exactly two shapes. The audio shape
+    above opens a live stream. The text shape carries typed input and skips
+    audio entirely:
+  </p>
+  <pre><code>{"input": {"type": "text", "text": "tell Sam I'm running ten minutes late"}}</code></pre>
+  <p>
+    With text input the client sends <code>finalize</code> immediately after
+    <code>ready</code>, no binary frames, no partials. <code>text</code> is
+    1–4000 characters (or the advertised <code>max_text_chars</code>).
+    A route whose <code>text_input</code> capability is <code>false</code>
+    answers text input with <code>not_supported</code>.
+  </p>
+
+  <h3>ready — the server accepts the operation</h3>
+  <pre><code>{"event": "ready", "protocol": 4, "op_id": "op_7f3a…",
+ "stt": "streaming"}   // "streaming" | "buffered" | null (text input)</code></pre>
+  <p>
+    <code>"buffered"</code> means no live recognizer is available right now:
+    audio is still accepted, no partials will come, and the transcript is
+    produced at finalize. The client needs no special handling beyond not
+    waiting for partials. The client MUST NOT send binary frames before
+    <code>ready</code>.
+  </p>
+
+  <h3>Audio frames</h3>
+  <ul>
+    <li>Binary WebSocket frames, raw PCM16 bytes, in capture order —
+        WebSocket message order <em>is</em> the audio order.</li>
+    <li>At most 524 288 bytes per frame (or the advertised
+        <code>max_frame_bytes</code>); empty frames are ignored. Frame
+        boundaries carry no meaning — send whatever cadence the recorder
+        produces (100–500 ms works well).</li>
+    <li>The client MUST count what it sends: total frames, total bytes,
+        total captured milliseconds. Those counts are the reliability check
+        at finalize.</li>
+  </ul>
+
+  <h3>partial — live feedback while the user speaks</h3>
+  <pre><code>{"event": "partial", "op_id": "op_7f3a…", "seq": 12,
+ "frames": 41, "bytes": 1312768,
+ "text": "let's push the review to thursday afternoon"}</code></pre>
+  <ul>
+    <li><code>text</code> is the <strong>cumulative transcript of the whole
+        utterance</strong>, never a delta: render it as-is, replacing the
+        previous partial. The server re-accumulates across recognizer
+        segment resets, so <code>text</code> never goes backwards.</li>
+    <li><code>seq</code> is monotonic per operation; a client drops anything
+        out of order. <code>frames</code>/<code>bytes</code> report what the
+        server has consumed so far — a client MAY use them to detect a
+        stalled pipe early.</li>
+    <li>On <code>/dictate</code> the partial is the product. On
+        <code>/ask</code> and <code>/imagine</code> it shows the user what is
+        being heard while the real work starts at finalize.</li>
+  </ul>
+
+  <h3>finalize — no more input</h3>
+  <p>
+    One text frame ends input and starts the route's work. Its common part
+    carries the client's own audio accounting; its route-specific part is
+    §5.
+  </p>
+  <pre><code>{"type": "finalize",
+ "audio": {"frames": 47, "bytes": 1504256, "duration_ms": 11200},
+ …route-specific fields…}</code></pre>
+  <p>
+    <code>audio</code> is required for audio input and forbidden for text
+    input. The server compares the client's totals with what it received:
+    on any mismatch it MUST answer the <code>audio_incomplete</code> error
+    (retryable) rather than transcribe silently truncated audio. This is
+    the V4 reliability contract: TCP orders and delivers what arrives, the
+    totals check proves <em>everything</em> arrived, and recovery (§8)
+    replays what did not.
+  </p>
+
+  <h3>progress — keep-alive while working</h3>
+  <pre><code>{"event": "progress", "op_id": "op_7f3a…", "stage": "generating",
+ "elapsed_ms": 8200}</code></pre>
+  <p>
+    After finalize, work may take a while — transcription a few seconds,
+    image generation tens of seconds. The server MUST emit
+    <code>progress</code> (or a WebSocket ping) at least every 20 seconds
+    until the terminal event, or clients will rightly treat the connection
+    as dead. <code>stage</code> is free-form and shown to the user.
+  </p>
+
+  <h3>cancel — abandon</h3>
+  <pre><code>{"type": "cancel"}</code></pre>
+  <p>
+    The server discards everything and closes 1000 with no terminal event.
+    Valid at any point before the terminal event.
+  </p>
+
+  <h3>Exactly one terminal event</h3>
+  <p>
+    Every operation that is not cancelled ends in exactly one
+    <code>result</code> (§6) or exactly one <code>error</code> (§9), sent
+    after all queued partials, followed by the close. <code>result</code>
+    and <code>error</code> are mutually exclusive; the last <code>text</code>
+    the client holds is authoritative. A server MUST NOT close without a
+    terminal event except on <code>cancel</code> or transport failure.
+  </p>
+
+  <h3>Timeouts and bounds</h3>
+  <table>
+    <tr><th>Bound</th><th>Default</th><th>On violation</th></tr>
+    <tr><td>Upgrade → <code>start</code></td><td>10 s</td><td><code>timeout</code> / 4408</td></tr>
+    <tr><td>Gap between audio frames</td><td>60 s</td><td><code>timeout</code> / 4408</td></tr>
+    <tr><td>Total audio per operation</td><td>600 s</td><td><code>audio_too_long</code> / 4413</td></tr>
+    <tr><td>Audio at finalize</td><td>≥ 300 ms</td><td><code>audio_too_short</code> / 4422</td></tr>
+    <tr><td>Server silence after finalize</td><td>20 s max</td><td>client MAY treat as dead and recover (§8)</td></tr>
+  </table>
+
+  <h2>5 · The three routes and their finalizers</h2>
+  <p>
+    The lifecycle is shared; the finalizer is the route's own. Unknown
+    finalizer fields are ignored like any other unknown field; a finalizer
+    field on the wrong route is simply unknown there.
+  </p>
+
+  <h3>/dictate — speech becomes insert-ready text · required</h3>
+  <table>
+    <tr><th>Finalizer field</th><th>Type</th><th>Meaning</th></tr>
+    <tr><td><code>polish</code></td><td>boolean, default <code>true</code></td>
+        <td>Run <a href="/cleanup/">transcript cleanup
+            (<code>caret-cleanup/1</code>)</a> on the final transcript.
+            <code>false</code> returns the raw transcript. A failed cleanup
+            MUST return the raw transcript, never an error — cleanup is a
+            polish, not a gate.</td></tr>
+  </table>
+  <p>
+    With text input, <code>/dictate</code> runs the same cleanup pass over
+    text the client already has — the V4 home of "clean this up".
+  </p>
+
+  <h3>/ask — an instruction becomes one message · optional</h3>
+  <table>
+    <tr><th>Finalizer field</th><th>Type</th><th>Meaning</th></tr>
+    <tr><td><code>visible_text</code></td><td>string, ≤4000, optional</td>
+        <td>What the client can see near the cursor — often nothing, never
+            the whole conversation. A register hint, and untrusted: it is
+            someone else's words and may try to instruct your agent. Context,
+            never a command.</td></tr>
+  </table>
+  <p>
+    The answer is the message itself — no preamble, no quotation marks, no
+    Markdown fence. The user previews it before it is inserted, so Ask MUST
+    be read-only: a draft that books the meeting it describes is a side
+    effect nobody approved. Say so in your agent prompt, every time.
+  </p>
+
+  <h3>/imagine — a prompt becomes an image · optional</h3>
+  <table>
+    <tr><th>Finalizer field</th><th>Type</th><th>Meaning</th></tr>
+    <tr><td><code>aspect_ratio</code></td><td><code>"1:1"</code> | <code>"3:2"</code> | <code>"2:3"</code>, default <code>"1:1"</code></td>
+        <td>Unsupported values get <code>bad_request</code>.</td></tr>
+    <tr><td><code>quality</code></td><td><code>"low"</code> | <code>"medium"</code> | <code>"high"</code>, default <code>"high"</code></td>
+        <td>Provider-relative.</td></tr>
+  </table>
+  <p>
+    Generating the <em>same</em> person, pet, or object across many prompts
+    is backend behavior on top of this route, not a contract change: see
+    <a href="/imagine-references/">repeatable Imagine references</a>.
+  </p>
+
+  <h2>6 · Typed terminal results</h2>
+  <p>
+    The terminal <code>result</code> event wraps a discriminated
+    <code>result</code> object; <code>result.type</code> is fixed per route.
+    A client dispatches on the type, so a proxy that crosses wires fails
+    loudly instead of inserting an image caption as a text message.
+  </p>
+  <pre><code>{"event": "result", "op_id": "op_7f3a…", "request_id": "req_5a09…",
+ "audio": {"frames": 47, "bytes": 1504256, "duration_ms": 11200},
+ "result": { …typed, see below… }}</code></pre>
+  <p><code>audio</code> echoes what the server actually consumed (absent for
+     text input). The per-route result types:</p>
+  <pre><code>// /dictate → "dictation"
+{"type": "dictation",
+ "text": "Let's push the review to Thursday afternoon.",
+ "raw_transcript": "lets push the review to thursday afternoon",
+ "polish_applied": true,
+ "stt_route": "stream"}          // "stream" | "fallback", §8
+
+// /ask → "message"
+{"type": "message",
+ "text": "Hey Sam, I'm running about ten minutes late.",
+ "transcript": "tell sam i'm running ten minutes late"}   // audio input only
+
+// /imagine → "image"
+{"type": "image",
+ "mime_type": "image/png",
+ "byte_length": 184320,
+ "sha256": "9f86d081884c7d65…",
+ "data_base64": "iVBORw0KGgo…",
+ "transcript": "a lighthouse at dusk in watercolour",     // audio input only
+ "provider": "my-image-tool"}                             // optional</code></pre>
+  <ul>
+    <li>Fields shown are required unless marked otherwise;
+        <code>data_base64</code> is the only image payload transport — no
+        URL form, no data-URL form. <code>byte_length</code> and
+        <code>sha256</code> MUST describe the delivered bytes, and clients
+        verify them.</li>
+    <li><code>transcript</code> (and <code>raw_transcript</code>) is how the
+        user tells a mis-hearing apart from a bad answer; return it whenever
+        the input was speech.</li>
+    <li>New result fields may be added; new <code>result.type</code> values
+        require protocol 5.</li>
+  </ul>
+
+  <h2 id="7">7 · Vocabulary injection</h2>
+  <p>
+    Recognizers mangle exactly the words users care most about — names,
+    products, jargon. The <code>vocabulary</code> array in
+    <code>start</code> is the client's per-operation term list, and a
+    backend advertising <code>"vocabulary": true</code> MUST route it to
+    wherever it can take effect:
+  </p>
+  <ul>
+    <li>into the recognizer's biasing / hotword interface where one exists,
+        for both streaming and fallback transcription;</li>
+    <li>into the <a href="/cleanup/">cleanup glossary</a>, so the polish
+        pass spells the terms as given rather than "correcting" them.</li>
+  </ul>
+  <table>
+    <tr><th>Rule</th><th>Detail</th></tr>
+    <tr><td>Shape</td><td>Unique strings, each 1–64 characters, at most 200
+        entries (or the advertised limit). Earlier entries are higher
+        priority when the recognizer caps out.</td></tr>
+    <tr><td>Semantics</td><td>Biasing, not commands: an entry makes its
+        surface form more likely, it never rewrites meaning.</td></tr>
+    <tr><td>Privacy</td><td>Vocabulary is user content — a contact list in
+        miniature. Do not log it, do not persist it beyond the operation,
+        never expose it on <code>/health</code>.</td></tr>
+    <tr><td>Capability off</td><td>Advertise <code>"vocabulary": false</code>
+        and clients omit the field. A backend MUST NOT advertise
+        <code>true</code> and drop the list on the floor.</td></tr>
+  </table>
+
+  <h2>8 · Reliability: recovery, idempotency, fallback</h2>
+  <p>
+    V4 has one durability story and it is the client. The client already
+    holds the audio (it recorded it); the backend keeps no state a lost
+    connection strands. Three mechanisms make that safe:
+  </p>
+  <ul>
+    <li><strong>Recovery is replay.</strong> If the socket dies before the
+        terminal event, the server discards the operation entirely. The
+        client keeps its captured audio buffered locally until it holds a
+        terminal result, and on failure replays the whole operation — same
+        <code>client_request_id</code>, same audio, fresh connection. Same
+        audio in, same transcript out; nothing is lost but time.</li>
+    <li><strong>Idempotency caps the cost of replay.</strong>
+        <code>client_request_id</code> identifies the operation across
+        connections. A backend SHOULD cache successful terminal results for
+        at least five minutes; on a replayed
+        <code>client_request_id</code> it MAY answer <code>ready</code> and
+        then the cached <code>result</code> immediately — the client MUST
+        accept a result at any point after <code>ready</code> and stop
+        sending. Failures are not replayed from cache: retrying a failure
+        is the point of retrying. This is what keeps "the user tapped again
+        after a network error" from becoming two image generations and two
+        bills.</li>
+    <li><strong>Streaming failure is not operation failure.</strong> The
+        server MUST buffer accepted audio independently of any live
+        recognizer, bounded by <code>max_audio_seconds</code>. If the
+        streaming recognizer is unavailable at start, dies mid-stream, or
+        fails at flush, partials stop but the operation lives on: finalize
+        transcribes the merged buffer through batch STT and the result
+        reports <code>"stt_route": "fallback"</code>. One rule guards
+        correctness: an <em>empty</em> transcript from a healthy stream is
+        <code>no_speech_detected</code>, never a fallback trigger — silence
+        is an answer, not an error.</li>
+  </ul>
+
+  <h2>9 · Errors and close codes</h2>
+  <p>The terminal error event, on every route:</p>
+  <pre><code>{"event": "error", "op_id": "op_7f3a…", "request_id": "req_2bda…",
+ "code": "transcription_failed",
+ "message": "speech recognition unavailable",
+ "retryable": true}</code></pre>
+  <p>
+    <code>message</code> is shown to the user verbatim — keep it short and
+    free of internals. The server closes with the mapped WebSocket code
+    after sending the event. The code list is append-only; a client meeting
+    an unknown code falls back to <code>retryable</code>, so set it
+    truthfully — it is the only field a future client can rely on.
+  </p>
+  <table>
+    <tr><th><code>code</code></th><th>Close</th><th>Meaning</th></tr>
+    <tr><td><code>unauthorized</code></td><td>4401</td><td>Missing or invalid credential.</td></tr>
+    <tr><td><code>rate_limited</code></td><td>4429</td><td>Per-credential limit hit. Retryable.</td></tr>
+    <tr><td><code>not_supported</code></td><td>4404</td><td>Route not served, or text input where <code>text_input</code> is false. Check <code>/health</code>.</td></tr>
+    <tr><td><code>protocol_error</code></td><td>4400</td><td>Wrong first frame, malformed JSON, unknown control type, wrong <code>protocol</code>, audio before <code>ready</code>, or binary frames on text input.</td></tr>
+    <tr><td><code>bad_request</code></td><td>4400</td><td>Invalid start/finalize parameters, oversized frame, bad vocabulary shape.</td></tr>
+    <tr><td><code>timeout</code></td><td>4408</td><td>No <code>start</code> in 10 s, or a 60 s audio gap. Retryable.</td></tr>
+    <tr><td><code>audio_incomplete</code></td><td>4409</td><td>Finalize totals disagree with what the server received. Retryable — replay the operation.</td></tr>
+    <tr><td><code>audio_too_long</code></td><td>4413</td><td>Audio exceeded the advertised bound.</td></tr>
+    <tr><td><code>audio_too_short</code></td><td>4422</td><td>Finalize with under 300 ms of audio.</td></tr>
+    <tr><td><code>no_speech_detected</code></td><td>4422</td><td>Healthy transcription found no words.</td></tr>
+    <tr><td><code>transcription_failed</code></td><td>4503</td><td>Every transcription route failed. Retryable.</td></tr>
+    <tr><td><code>generation_failed</code></td><td>4503</td><td>The route's provider failed (agent for <code>/ask</code>, image provider for <code>/imagine</code>). Retryable.</td></tr>
+    <tr><td><code>internal_error</code></td><td>4500</td><td>Unexpected server error. Retryable.</td></tr>
+  </table>
+  <p>Normal completion and <code>cancel</code> close with 1000.</p>
+
+  <h2>10 · Retention and privacy</h2>
+  <ul>
+    <li>Audio lives in memory, bounded (600 s of PCM16 ≈ 19 MB), and dies
+        with the operation. If fallback STT needs a file, it is temporary
+        and deleted the moment transcription returns.</li>
+    <li>A cached terminal result (§8) is the one thing that may outlive the
+        connection; cap its lifetime in minutes and purge on delivery of a
+        replay.</li>
+    <li>Do not log transcript, audio, vocabulary, <code>visible_text</code>,
+        or generated images. Log ids, counts, timings, and error codes.</li>
+    <li><code>/health</code> is anonymous: never expose configuration
+        details a stranger should not see. Publishing which cleanup wording
+        you run is fine — publish the <a href="/cleanup/">spec digest</a>,
+        never the prompt.</li>
+  </ul>
+
+  <h2 id="11">11 · Conformance</h2>
+  <p>A <strong>backend</strong> conforms when it:</p>
+  <ul>
+    <li>serves <code>GET /health</code> with
+        <code>"protocol": "caret/v4"</code> and honest capabilities, and
+        serves <code>/dictate</code> whenever it reports
+        <code>status</code> other than <code>not_ready</code>;</li>
+    <li>implements the shared lifecycle on every route it advertises:
+        <code>start</code>/<code>ready</code>, ordered binary audio,
+        cumulative partials where advertised, per-route finalizers, and
+        exactly one typed terminal event after all partials;</li>
+    <li>enforces the bounds of §4 with the error codes of §9, and never
+        emits anything but the events on this page;</li>
+    <li>verifies finalize audio totals and answers
+        <code>audio_incomplete</code> on mismatch;</li>
+    <li>buffers audio independently of the streaming recognizer and falls
+        back per §8;</li>
+    <li>authenticates every operation route per §3, fails closed, and
+        compares credentials in constant time;</li>
+    <li>applies vocabulary wherever it advertises the capability, and
+        applies <a href="/cleanup/"><code>caret-cleanup/1</code></a> when
+        <code>polish</code> is true — falling back to the raw transcript on
+        cleanup failure;</li>
+    <li>ignores unknown JSON fields everywhere.</li>
+  </ul>
+  <p>A <strong>client</strong> conforms when it:</p>
+  <ul>
+    <li>refuses non-TLS base URLs, discovers capabilities from
+        <code>/health</code>, and never offers the user a route or input
+        mode the backend did not advertise;</li>
+    <li>sends <code>start</code> first, audio only after <code>ready</code>,
+        counts every frame it sends, and reports truthful totals at
+        finalize;</li>
+    <li>renders partials as replaceable cumulative text and treats the
+        terminal event as the only authoritative answer;</li>
+    <li>keeps captured audio until it holds a terminal result, and recovers
+        from any transport failure by replaying with the same
+        <code>client_request_id</code> on a fresh connection — accepting an
+        immediate cached result;</li>
+    <li>acts on unknown error codes via <code>retryable</code>, ignores
+        unknown JSON fields and unknown event types, and verifies
+        <code>sha256</code>/<code>byte_length</code> on images before
+        handing them to the user.</li>
+  </ul>
+  <p>
+    A runnable conformance checker is part of the planned public reference
+    implementation — see <a href="/reference/">the reference design</a>.
+    Until it ships, this page is the checklist.
+  </p>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="/">Overview</a>
+    <a href="/reference/">Reference</a>
+    <a href="/migration/">Migration</a>
+    <a href="/cleanup/">Cleanup</a>
+  </div>
+</footer>
+</body>
+</html>

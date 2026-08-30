@@ -1,142 +1,89 @@
-# Caret — bring your own backend
+# Caret — the caret/v4 any-agent protocol
 
-Caret is an iOS keyboard. Everything it does — writing a message, taking
-dictation, generating an image — it does by calling an HTTP API. This
-repository is everything you need to make that API yours.
+Caret is an iOS keyboard. Everything it does — taking dictation, writing
+a message, generating an image — it does by talking to a backend you
+configure: a base URL and a credential, no account, no relay, no third
+party in the middle of your typing.
 
-Point Caret at a URL you control and your keyboard runs on your agent, your
-model, your machine. No account, no relay, no third party in the middle of
-your typing.
+The contract between keyboard and backend is **`caret/v4`**: one base
+URL serving three WebSocket routes — `/dictate`, `/ask`, `/imagine` —
+over one shared live-audio lifecycle, with health and capability
+discovery on `GET /health`. The protocol has no privileged party: any
+client and any backend may implement it, and two conforming
+implementations interoperate without ever having met.
+
+This repository is the protocol's public home.
 
 > **License notice:** this repository is **source-available, not open
 > source**. You may use, copy, and modify it to configure, run, or extend
 > a Caret integration — and for that purpose only. See
 > [LICENSE](LICENSE).
 
-```
-reference-backend/  THE PRIMARY PATH — one complete caret/v2 backend in
-                    stdlib Python with pluggable, capability-routed
-                    adapters: your agent answers Ask, local OpenWhisper
-                    takes dictation by default, every route swappable
-integrations/       native packaging where a runtime supports it —
-                    a Claude Code plugin, a Hermes skill — plus the
-                    evidence-based plugin decision matrix
-docs/               the docs site: connect runbooks + implementation guide
-agent-prompts/      prompts your coding agent can follow end to end
-openapi.yaml        the caret/v2 contract — the normative document
-scripts/            the public-repo guard and repo checks
-```
+## Start here
 
-## Start here: connect the agent you already run
+**Read the protocol:** [`docs/protocol/`](docs/protocol/index.html),
+published at <https://docs.typewithcaret.com/protocol/>. It is the
+complete, normative contract — the shared lifecycle, the per-route
+finalizers and typed terminal results, backend-owned auth, vocabulary
+injection, the reliability rules, the error table, and the conformance
+checklists for both sides. It is written to be sufficient on its own:
+you can implement a backend or a client from that one page.
 
-Already running Claude Code, Codex, Hermes, or a hosted agent of your own?
-Deploy the reference backend, pick your agent, and your keyboard drafts
-through it:
+The short version of what a backend serves:
 
-```sh
-git clone https://github.com/kballenegger/caret-docs.git
-cd caret-docs/reference-backend
-
-export CARET_AGENT=claude-code              # hermes | codex | grokbot | openclaw | custom-http
-python3 -c 'import secrets;print(secrets.token_urlsafe(32))'  # generate a key — copy the output
-export CARET_API_KEYS=paste-the-key-here                      # the same key goes into the Caret app
-python3 -m caret_backend --check
-python3 -m caret_backend --port 8787
-```
-
-Put TLS in front (a tailnet or a reverse proxy — Caret requires
-`https://`), then hand the phone a `caret-connect:v1` code instead of a
-43-character key:
-
-```sh
-python3 -m caret_backend --qr --url https://your-host
-```
-
-Or paste the URL and key into the app by hand. Either way, done. The runbooks at
-<https://docs.typewithcaret.com/connect/> cover each runtime on a local
-Mac and on a VPS/hosted box, with honest compatibility labels.
-
-**The fastest way: let your agent do it.** Point your coding agent at
-[`agent-prompts/connect-caret.md`](agent-prompts/connect-caret.md)
-(also at <https://docs.typewithcaret.com/agent-prompts/connect-caret.md>).
-It clones this repository, configures the backend, validates it, and
-deploys it where you want it. Claude Code users can install the packaged
-plugin instead (`claude plugin marketplace add kballenegger/caret-docs`),
-and Hermes users the packaged skill — see
-[`integrations/`](integrations/).
-
-**Capabilities are routed, not assumed.** Speech is its own lane: no
-agent runtime has a verified transcription interface, so dictation uses
-local [OpenWhisper](https://github.com/openai/whisper) by default when
-installed — audio never leaves the machine — or the STT adapter you
-configure (`CARET_STT_HTTP_URL`, `CARET_STT_COMMAND`). Only then does
-text reach your agent, which answers Ask and cleans up transcripts (as a
-constrained text-only request). Imagine uses the image provider you
-configure — or GrokBot's own, with `CARET_GROKBOT_IMAGE=on` — and stays
-off otherwise. `GET /v2/health` reports the resolved route per operation.
-
-**Dictate is the one capability that is not optional.** A valid
-`caret/v2` backend takes speech and advertises `"dictate": true`. With
-no STT adapter resolved, `--check` fails and health reports
-`"status": "not_ready"` with a `no_stt_adapter` blocker rather than
-presenting itself as a working backend. Ask and Imagine stay optional and
-are reported honestly off.
-
-## The advanced path: implement caret/v2 yourself
-
-Want a backend you fully own — a different language, your own process
-model? Read [`docs/your-agent/`](docs/your-agent/) — one page, every
-request and response shape, in the order you would implement them. Point
-your agent at
-[`agent-prompts/implement-caret-backend.md`](agent-prompts/implement-caret-backend.md)
-to have it built for you. Then check any implementation, in any language,
-against the contract:
-
-```sh
-python3 reference-backend/conformance.py --base-url https://your-host --api-key KEY
-```
-
-## What the contract asks of you
-
-Three product operations over one mode-neutral audio transport. Every
-operation takes the same discriminated `input` object — `{"type":
-"text", ...}` or `{"type": "session", ...}` — and an operation called
-with a session id atomically seals, transcribes, and consumes the
-session. There is no finalize endpoint, and a session carries exactly
-one terminal result.
-
-| Endpoint | Purpose |
+| Route | Purpose |
 | --- | --- |
-| `GET /v2/health` | Say who you are and what you can do |
-| `POST /v2/sessions` | Open a chunked audio session (mode-neutral) |
-| `PUT /v2/sessions/{id}/chunks/{seq}` | Upload audio as it is spoken |
-| `POST /v2/sessions/{id}/ack` | Acknowledge a terminal result (optional) |
-| `POST /v2/dictate` | Dictate — transcribe and clean up (required) |
-| `POST /v2/ask` | Ask — write or rewrite text (optional) |
-| `POST /v2/imagine` | Generate an image (optional) |
+| `GET /health` | Say who you are and what you can do (anonymous, HTTPS) |
+| `wss /dictate` | Speech becomes polished text — live partials, then a `"dictation"` result. **Required.** |
+| `wss /ask` | An instruction becomes one message — a `"message"` result. Optional. |
+| `wss /imagine` | A prompt becomes an image — an `"image"` result. Optional. |
 
-`capabilities` in your health response decides what the keyboard shows,
-and it must be true. Dictate is required: declare
-`{"dictate": true, "ask": false, "imagine": false}` and you have a
-legitimate, complete backend. Declare `"dictate": false` and you do
-not have a Caret backend — say `"status": "not_ready"` instead.
+All three WebSocket routes speak the same lifecycle: authenticate on
+upgrade, `start`, stream binary audio (or send typed text), receive
+cumulative `partial` transcripts, send the route's `finalize` frame,
+receive exactly one typed terminal result. Reliability is client-side
+replay: the client keeps its audio until it holds a result, finalize
+totals prove the server heard everything, and `client_request_id` keeps
+a replay from becoming a second bill.
 
-`caret/v1` is deprecated and no longer documented; V2 is the only
-supported contract.
+## The rest of the active documentation
+
+| Page | What it covers |
+| --- | --- |
+| [Overview](https://docs.typewithcaret.com/) | The product surface and the design principles. |
+| [Reference implementation design](https://docs.typewithcaret.com/reference/) | The plan for the public V4 reference backend and its conformance checker. **Design only — not yet published; there is no V4 reference code to download yet.** |
+| [Migration](https://docs.typewithcaret.com/migration/) | Coming from `caret/v2`/`v3`: what changed, side-by-side serving at one base URL, cutover steps. |
+| [Cleanup (`caret-cleanup/1`)](https://docs.typewithcaret.com/cleanup/) | The published transcript-cleanup wording, versioned independently of the protocol, vendored in [`spec/cleanup/v1/`](spec/cleanup/v1/). |
+| [Imagine references](https://docs.typewithcaret.com/imagine-references/) | Generating the same person, pet, or object repeatably — a backend behavior on top of `/imagine`. |
+
+## Legacy: everything pre-V4
+
+`caret/v2` (REST) and `caret/v3` (the optional live-dictation WebSocket)
+are retired. Everything that documented them — the implementation guide,
+the connect runbooks, `openapi.yaml`, the V2 reference backend and its
+conformance checker, the packaged Claude Code plugin and Hermes skill,
+the agent prompts — is preserved, clearly marked, under
+[`legacy/`](legacy/README.md) in this repository and
+<https://docs.typewithcaret.com/legacy/> on the docs site. Old URLs
+redirect. Nothing in the archive applies to V4 except as history.
 
 ## Checking a change to this repository
 
-One command, no dependencies:
+One command, no dependencies beyond Python 3:
 
 ```sh
 make test
 ```
 
-That runs the public-repo guard (`scripts/public_guard.py` — this
-repository must never reference private machines, private repositories,
-or credentials), the packaged-integration checks, and the reference
-backend's hermetic test suite — all standard library, no network beyond
-loopback, no model calls.
+That runs, in order: the public-repo guard (`scripts/public_guard.py` —
+this repository must never reference private machines, private
+repositories, or credentials), the docs structure check
+(`scripts/docs_check.py` — active pages link only to active pages,
+archived pages carry their banner, every internal link resolves), the
+cleanup-spec digest check, the unit tests for those scripts, and the
+archived V2 reference backend's hermetic test suite (archived means
+frozen, not broken). `make site` assembles the deployable static site
+into `_site/` and runs both guards against the output.
 
 ## License
 
