@@ -38,6 +38,12 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertIn("/nowhere/", findings[0])
 
+    def test_redirect_stub_must_target_its_matching_archive_page(self):
+        html = '<meta http-equiv="refresh" content="0; url=/legacy/live-dictation/">'
+        findings = docs_check.check_stub_target(html, "connect/index.html")
+        self.assertEqual(len(findings), 1)
+        self.assertIn("/legacy/connect/", findings[0])
+
     def test_retired_url_is_flagged_on_active_pages(self):
         html = '<a href="/your-agent/">old guide</a>'
         findings = docs_check.check_retired_references(html, "index.html")
