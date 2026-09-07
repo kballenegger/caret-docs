@@ -304,6 +304,66 @@ class ResultShapeTest(unittest.TestCase):
         self.assertNotIn("audio", probe.terminal)
 
 
+class LifecycleEdgeTest(unittest.TestCase):
+    def test_cancel_closes_without_a_terminal_event(self):
+        with full_backend() as (_, url):
+            conn, status, error = ws.dial(
+                url.replace("http://", "ws://") + "/dictate",
+                headers={"Authorization": "Bearer test-key"},
+                timeout=5.0,
+            )
+            self.assertEqual(101, status)
+            self.assertEqual("Switching Protocols", error)
+            try:
+                conn.set_timeout(5.0)
+                conn.send_text(json.dumps(start_frame("cancel")))
+                binary, data = conn.read_message()
+                self.assertFalse(binary)
+                self.assertEqual("ready", json.loads(data)["event"])
+                conn.send_text(json.dumps({"type": "cancel"}))
+                events = []
+                with self.assertRaises(ws.CloseError) as raised:
+                    while True:
+                        binary, data = conn.read_message()
+                        self.assertFalse(binary)
+                        events.append(json.loads(data))
+                self.assertEqual(1000, raised.exception.code)
+                self.assertFalse(
+                    any(event.get("event") in ("result", "error") for event in events)
+                )
+            finally:
+                conn.close(1000, "")
+
+    def test_buffered_stt_falls_back_at_finalize(self):
+        command = f"command:{sys.executable} -c 'print(\"buffered transcript\")'"
+        with backend(stt=command) as (_, url):
+            health = checker_for(url)._fetch_health("test-key")
+            self.assertFalse(health["capabilities"]["partials"][protocol.ROUTE_DICTATE])
+            probe = checker_for(url)._operate(
+                protocol.ROUTE_DICTATE,
+                start=start_frame("buffered"),
+                audio=chunk_audio(tone(1000), 200),
+                finalize={"type": "finalize", "audio": totals(chunk_audio(tone(1000), 200))},
+            )
+        self.assertEqual("result", probe.terminal_kind, probe.error)
+        self.assertEqual("fallback", probe.terminal["result"]["stt_route"])
+        self.assertEqual("buffered transcript", probe.terminal["result"]["raw_transcript"])
+
+    def test_polish_false_returns_the_raw_transcript(self):
+        chunks = chunk_audio(tone(1000), 200)
+        with full_backend() as (_, url):
+            probe = checker_for(url)._operate(
+                protocol.ROUTE_DICTATE,
+                start=start_frame("unpolished"),
+                audio=chunks,
+                finalize={"type": "finalize", "audio": totals(chunks), "polish": False},
+            )
+        self.assertEqual("result", probe.terminal_kind, probe.error)
+        result = probe.terminal["result"]
+        self.assertEqual(result["raw_transcript"], result["text"])
+        self.assertFalse(result["polish_applied"])
+
+
 class CleanupSpecTest(unittest.TestCase):
     """The cross-language anti-drift check: this implementation composes
     the same bytes and the same digest as the spec on disk, which is what

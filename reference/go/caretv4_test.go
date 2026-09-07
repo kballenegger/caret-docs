@@ -2,6 +2,7 @@ package caretv4
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -371,6 +372,102 @@ func TestVocabularyReachesCleanup(t *testing.T) {
 // TestCleanupSpecComposition is the cross-language anti-drift check: the
 // Go composition of prompt.md and glossary.json must be byte-for-byte
 // composed.txt, the same assertion the Python implementation makes.
+func TestCancelClosesWithoutTerminalEvent(t *testing.T) {
+	server := fullTestServer(t)
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+testKey)
+	conn, _, err := Dial(strings.Replace(server.URL, "http://", "ws://", 1)+"/dictate", DialOptions{
+		Header:  header,
+		Timeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close(1000, "")
+
+	start, _ := json.Marshal(startFrame("cancel", nil))
+	if err := conn.WriteText(string(start)); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	ready, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("ready: %v", err)
+	}
+	var readyEvent map[string]any
+	if err := json.Unmarshal(ready.Data, &readyEvent); err != nil {
+		t.Fatalf("ready JSON: %v", err)
+	}
+	if ready.Binary || readyEvent["event"] != "ready" {
+		t.Fatalf("first event = %#v, want ready text", readyEvent)
+	}
+	if err := conn.WriteText(`{"type":"cancel"}`); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	for {
+		msg, err := conn.ReadMessage()
+		if err != nil {
+			var closeErr *CloseError
+			if !errors.As(err, &closeErr) {
+				t.Fatalf("after cancel: %v", err)
+			}
+			if closeErr.Code != 1000 {
+				t.Fatalf("close code = %d, want 1000", closeErr.Code)
+			}
+			return
+		}
+		if !msg.Binary {
+			var event map[string]any
+			if json.Unmarshal(msg.Data, &event) == nil && (event["event"] == "result" || event["event"] == "error") {
+				t.Fatalf("cancel produced terminal event: %#v", event)
+			}
+		}
+	}
+}
+
+func TestBufferedSTTFallsBackAtFinalize(t *testing.T) {
+	server, _ := newTestServer(t, Config{STT: "command:/bin/sh -c 'printf buffered-transcript'"})
+	check := newChecker(server.URL)
+	chunks := chunkAudio(tone(1000), 200)
+	p := check.run(operation{
+		route:    RouteDictate,
+		start:    startFrame("buffered", nil),
+		audio:    chunks,
+		finalize: map[string]any{"type": "finalize", "audio": totals(chunks)},
+	})
+	if p.terminalKind() != "result" {
+		t.Fatalf("got %q %q", p.terminalKind(), p.errorCode())
+	}
+	result, _ := p.terminal["result"].(map[string]any)
+	if result["stt_route"] != "fallback" {
+		t.Errorf("stt_route = %v, want fallback", result["stt_route"])
+	}
+	if result["raw_transcript"] != "buffered-transcript" {
+		t.Errorf("raw_transcript = %v", result["raw_transcript"])
+	}
+}
+
+func TestPolishFalseReturnsRawTranscript(t *testing.T) {
+	server := fullTestServer(t)
+	check := newChecker(server.URL)
+	chunks := chunkAudio(tone(1000), 200)
+	p := check.run(operation{
+		route:    RouteDictate,
+		start:    startFrame("unpolished", nil),
+		audio:    chunks,
+		finalize: map[string]any{"type": "finalize", "audio": totals(chunks), "polish": false},
+	})
+	if p.terminalKind() != "result" {
+		t.Fatalf("got %q %q", p.terminalKind(), p.errorCode())
+	}
+	result, _ := p.terminal["result"].(map[string]any)
+	if result["text"] != result["raw_transcript"] {
+		t.Errorf("text = %v, raw_transcript = %v", result["text"], result["raw_transcript"])
+	}
+	if result["polish_applied"] != false {
+		t.Errorf("polish_applied = %v, want false", result["polish_applied"])
+	}
+}
 func TestCleanupSpecComposition(t *testing.T) {
 	dir := mustSpecDir(t)
 	spec, err := LoadCleanupSpec(dir)
