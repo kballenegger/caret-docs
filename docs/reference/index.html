@@ -171,9 +171,10 @@ python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure
     <code>client_request_id</code>, unknown JSON fields ignored, honest
     capabilities versus served routes, <code>sha256</code> and
     <code>byte_length</code> matching the image bytes actually delivered,
-    and the error table with its close codes. Exit 0 means a V4 client
-    will be happy; 1 means something failed; 2 means the checker could
-    not run. Warnings never fail a run.
+    cancellation with a normal <code>1000</code> close and no terminal event,
+    buffered STT fallback reporting, and the error table with its close
+    codes. Exit 0 means a V4 client will be happy; 1 means something failed;
+    2 means the checker could not run. Warnings never fail a run.
   </p>
   <pre><code>go run ./cmd/caret-v4-conform -url https://backend.example.com -key "$CARET_API_KEY"</code></pre>
   <p>

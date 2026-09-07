@@ -140,6 +140,10 @@ this afternoon. It exercises what is easy to get subtly wrong.
   `audio_incomplete` with `retryable: true`
 * replay under a repeated `client_request_id`
 * unknown JSON fields ignored, so future additive changes survive
+* buffered speech lanes advertise `partials: false` and return
+  `stt_route: "fallback"` after finalize
+* cancellation closes with code `1000` and emits no terminal event
+* `polish: false` returns the raw transcript without claiming cleanup
 * the error table with its close codes: `protocol_error`,
   `bad_request`, `audio_too_short`, `no_speech_detected`,
   `not_supported`
