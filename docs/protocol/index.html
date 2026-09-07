@@ -582,10 +582,12 @@ text  {"type":"finalize", …}        ──▶
         handing them to the user.</li>
   </ul>
   <p>
-    A runnable conformance checker is part of the planned public reference
-    implementation — see <a href="/reference/">the reference design</a>.
-    Until it ships, this page is the checklist.
+    A runnable conformance checker ships with the public reference
+    implementation — see <a href="/reference/">reference</a>. Point it at
+    your backend and it walks this checklist for you:
   </p>
+  <pre><code>cd caret-docs/reference/go
+go run ./cmd/caret-v4-conform -url https://your-backend.example -key "$CARET_API_KEY"</code></pre>
 </main>
 
 <footer class="site">

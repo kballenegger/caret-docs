@@ -10,7 +10,7 @@
 
 PYTHON ?= python3
 
-.PHONY: help site test guard docs spec
+.PHONY: help site test guard docs spec reference-test reference-go reference-python
 
 help:
 	@echo "make site   assemble the deployable static site in _site/"
@@ -18,6 +18,7 @@ help:
 	@echo "make guard  just the public-repo guard (also runs first in make test)"
 	@echo "make docs   just the docs structure guard"
 	@echo "make spec   regenerate the derived cleanup-spec files in spec/cleanup/v1/"
+	@echo "make reference-test  just the V4 reference implementations (Go + Python)"
 
 # The extra copies below (openapi.yaml, agent-prompts/, integrations/)
 # keep pre-V4 deep links resolving at their old URLs; every copied file
@@ -54,4 +55,17 @@ test: guard
 	$(PYTHON) scripts/docs_check.py
 	$(PYTHON) scripts/build_cleanup_spec.py --check
 	$(PYTHON) -m unittest discover -s scripts -p 'test_*.py'
+	$(MAKE) reference-test
 	cd legacy/reference-backend && $(PYTHON) -m unittest discover -s tests
+
+reference-test: reference-go reference-python
+
+reference-go:
+	@if command -v go >/dev/null 2>&1; then \
+		cd reference/go && go vet ./... && go test ./...; \
+	else \
+		echo "reference-go: no Go toolchain — skipping (install Go to run the recommended implementation's suite)"; \
+	fi
+
+reference-python:
+	cd reference/python && $(PYTHON) -m unittest discover -s tests

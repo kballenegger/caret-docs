@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Public reference implementation — design</title>
-<meta name="description" content="The design for the public caret/v4 reference backend: a small, readable, dependency-light server with pluggable recognizer, agent, and image lanes, plus a conformance checker. Status: design — not yet published.">
+<title>Public reference implementation</title>
+<meta name="description" content="The public caret/v4 reference backend and conformance checker: two complete implementations, Go (recommended) and Python, with pluggable recognizer, agent, and image lanes. Dependency-free, runnable in one command.">
 <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
 </head>
@@ -26,29 +26,77 @@
 </header>
 
 <main class="wrap">
-  <p class="kicker">caret/v4 · reference implementation · design</p>
-  <h1>The public reference backend, by design.</h1>
+  <p class="kicker">caret/v4 · reference implementation</p>
+  <h1>The public reference backend.</h1>
   <p class="lead">
-    This page specifies the public <code>caret/v4</code> reference
-    implementation: what it will be, what it will refuse to be, and how its
-    pieces fit. It exists so that the code, when it lands in this
-    repository, has a contract of its own to be judged against.
+    Two complete <code>caret/v4</code> backends and two conformance
+    checkers live in this repository under
+    <a href="https://github.com/kballenegger/caret-docs/tree/main/reference"><code>reference/</code></a>:
+    one in Go, one in Python. Both are dependency-free, both run in one
+    command, and each language's checker is run against the other
+    language's server, so their agreement about the protocol is
+    demonstrated rather than asserted.
   </p>
 
   <div class="note">
-    <strong>Status: design. There is no code to download yet.</strong>
+    <strong>Go is the recommended default.</strong>
     <p style="margin:0.4rem 0 0">
-      Nothing on this page is shipped, and nothing on it has been tested,
-      because it does not exist yet. The <code>caret/v4</code> protocol
-      itself is not hypothetical — Caret's own production backend
-      implements it end to end — but that implementation is private and is
-      not this design. Until the public reference lands, implement V4
-      directly from <a href="/protocol/">the protocol page</a>; it is
-      written to be sufficient on its own. The archived
-      <a href="/legacy/">V2 reference backend</a> remains available but
-      speaks a retired contract.
+      It is the one to read first and the one to deploy. Python is the
+      supported alternative for operators who would rather run Python;
+      it implements the same protocol, passes the same checks, and
+      composes the same <code>caret-cleanup/1</code> digest. Neither
+      imports the other, and neither imports anything that is not
+      shipped with its language.
     </p>
   </div>
+
+  <h2>Run it</h2>
+  <pre><code># the recommended path
+git clone https://github.com/kballenegger/caret-docs
+cd caret-docs/reference/go
+go run ./cmd/caret-v4-backend -addr 127.0.0.1:8080 -keys dev-key
+
+# in another terminal
+go run ./cmd/caret-v4-conform -url http://127.0.0.1:8080 -key dev-key -insecure</code></pre>
+  <p>
+    That is a conforming backend. With no lane flags it serves
+    <code>/dictate</code> with built-in loopback providers: no model, no
+    network, no API keys of anyone's. Enough to point a client at, to run
+    the checker against, and to develop against on a plane. The Python
+    alternative is the same two commands:
+  </p>
+  <pre><code>cd caret-docs/reference/python
+python3 -m caret_v4 serve   --addr 127.0.0.1:8080 --keys dev-key
+python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure</code></pre>
+  <p>
+    Python 3.11 or newer, no virtualenv and no <code>pip install</code>,
+    because there is nothing to install. Full setup, the lane grammar for
+    wiring real recognizers and agents, TLS, and an honest list of
+    limitations are in
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/reference/README.md"><code>reference/README.md</code></a>.
+  </p>
+
+  <h2>Wiring real providers</h2>
+  <p>
+    A lane is a string, and the same grammar works for every provider in
+    both languages: <code>loopback</code> for the built-in deterministic
+    provider, <code>command:&lt;argv&gt;</code> to run a program,
+    an <code>https://</code> URL to POST JSON, or <code>none</code> to
+    turn the lane off.
+  </p>
+  <pre><code>go run ./cmd/caret-v4-backend \
+  -keys dev-key \
+  -stt 'command:whisper-cli --model base.en --file {audio} --output-txt -' \
+  -agent 'command:my-agent --prompt-stdin' \
+  -cleanup 'command:my-agent --prompt-stdin'</code></pre>
+  <p>
+    Capabilities follow the wiring, never a config flag: a route with no
+    provider is advertised <code>false</code> on <code>/health</code> and
+    answers <code>not_supported</code>. A backend with no speech lane
+    reports <code>status: not_ready</code> with a <code>no_stt</code>
+    blocker, because <code>/dictate</code> is mandatory and pretending
+    otherwise is the failure mode the protocol exists to prevent.
+  </p>
 
   <h2>Goals, in order</h2>
   <ol>
@@ -57,9 +105,10 @@
         <a href="/protocol/">the protocol page</a> implemented once, in an
         obvious place, in a codebase small enough to hold in your
         head.</li>
-    <li><strong>Dependency-light.</strong> Standard library plus, at most,
-        one WebSocket library where the standard library has none. No
-        framework, no build pipeline, no container required.</li>
+    <li><strong>Dependency-free.</strong> Standard library only in both
+        languages, WebSocket framing included. No framework, no build
+        pipeline, no container, no lockfile. <code>go build ./...</code>
+        works offline on a fresh checkout.</li>
     <li><strong>Pluggable lanes, honest capabilities.</strong> Speech,
         agent, and image providers plug in behind narrow interfaces;
         whatever fails to resolve is reported off in
@@ -71,24 +120,25 @@
   </ol>
 
   <h2>Shape</h2>
-  <pre><code>reference-v4/
-  server        the transport core: HTTP /health + the three WebSocket
-                routes, auth, framing, timeouts, the shared lifecycle
-                state machine — one implementation, three finalizers
-  lanes/
-    stt         streaming recognizer + batch fallback behind one
-                interface; local Whisper-class models first
-    agent       Ask: anything that takes a prompt and returns text —
-                a command line, an HTTP endpoint
-    image       Imagine: a command line or HTTP endpoint returning
-                image bytes
-  cleanup       caret-cleanup/1, consumed from spec/cleanup/v1/ as
-                data — never a fork of the wording
-  conformance   the checker: drives a live backend through the
-                lifecycle, the reliability rules, and the error table
-  tests         hermetic; loopback only, no model calls</code></pre>
+  <p>Every rule the protocol states is implemented once, in the file its
+     name suggests, in both languages.</p>
+  <pre><code>reference/
+  go/                        recommended
+    protocol.go              error table, close codes, audio and vocabulary rules
+    ws.go                    RFC 6455, standard library only
+    server.go                /health, routing, credentials, the result cache
+    session.go               the one lifecycle state machine, three finalizers
+    lanes.go                 recognizer, agent, image and cleanup providers
+    cleanup.go               caret-cleanup/1, consumed from spec/cleanup/v1/
+    conformance.go           the checker
+    cmd/caret-v4-backend/    the server binary
+    cmd/caret-v4-conform/    the checker binary
+  python/                    the supported alternative
+    caret_v4/                protocol.py ws.py server.py session.py lanes.py
+                             cleanup.py conformance.py __main__.py
+    tests/                   contract tests over a real socket</code></pre>
 
-  <h2>Design decisions already fixed</h2>
+  <h2>Design decisions</h2>
   <table>
     <tr><th>Decision</th><th>Rationale</th></tr>
     <tr><td>One lifecycle state machine shared by all three routes</td>
@@ -112,20 +162,30 @@
 
   <h2>The conformance checker</h2>
   <p>
-    The checker will treat the backend under test as a black box at a base
-    URL — any language, any host — and exercise what is easy to get subtly
+    The checker treats the backend under test as a black box at a base
+    URL — any language, any host, a production backend or a first attempt
+    written this afternoon — and exercises what is easy to get subtly
     wrong: audio-total verification and <code>audio_incomplete</code>,
     exactly-one-terminal-event ordering after queued partials, cumulative
     (never regressing) partial text, replay with a repeated
-    <code>client_request_id</code>, honest capabilities versus served
-    routes, and the full error table with its close codes. Exit 0 will
-    mean a V4 client will be happy.
+    <code>client_request_id</code>, unknown JSON fields ignored, honest
+    capabilities versus served routes, <code>sha256</code> and
+    <code>byte_length</code> matching the image bytes actually delivered,
+    and the error table with its close codes. Exit 0 means a V4 client
+    will be happy; 1 means something failed; 2 means the checker could
+    not run. Warnings never fail a run.
+  </p>
+  <pre><code>go run ./cmd/caret-v4-conform -url https://backend.example.com -key "$CARET_API_KEY"</code></pre>
+  <p>
+    Point it at your backend, not just at these. It is the harness that
+    makes "conforming" a thing you can check rather than a thing you
+    claim.
   </p>
 
-  <h2>What it will not be</h2>
+  <h2>What it is not</h2>
   <ul>
     <li>Not a hosted service, not a relay — the protocol has no privileged
-        party, and neither will the reference.</li>
+        party, and neither does the reference.</li>
     <li>Not a fork target for the cleanup wording: the spec is consumed
         as data from <a href="/cleanup/"><code>spec/cleanup/v1/</code></a>,
         digest-checked.</li>
@@ -134,11 +194,19 @@
         <a href="/migration/">migration</a>.</li>
   </ul>
 
-  <p class="note">
-    When the implementation lands, this page becomes its README's front
-    door and gains the run instructions; until then, treat every command
-    and path above as design, not documentation of something you can
-    download.
+  <h2>What the loopback providers are not</h2>
+  <p>
+    Loopback speech counts voiced 20 ms windows and spells the client's
+    vocabulary followed by filler. Loopback cleanup capitalizes a
+    sentence and adds a full stop. Loopback imagine draws a gradient
+    seeded by the prompt. They exist so the lifecycle, vocabulary
+    routing, silence handling and image hashing are exercisable with no
+    model and no network. They are not transcription, not an agent, and
+    not an image model, and they never claim otherwise on
+    <code>/health</code>. Wire a real provider before this faces a
+    keyboard, and read the limitations section of
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/reference/README.md"><code>reference/README.md</code></a>
+    first: in-memory state only, no rate limiting, no clustering.
   </p>
 </main>
 

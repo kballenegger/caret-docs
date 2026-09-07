@@ -8,3 +8,6 @@ data/
 *.log
 # Generated deployable static site.
 _site/
+# Built reference binaries.
+reference/go/caret-v4-backend
+reference/go/caret-v4-conform

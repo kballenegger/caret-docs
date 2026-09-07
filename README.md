@@ -51,7 +51,7 @@ a replay from becoming a second bill.
 | Page | What it covers |
 | --- | --- |
 | [Overview](https://docs.typewithcaret.com/) | The product surface and the design principles. |
-| [Reference implementation design](https://docs.typewithcaret.com/reference/) | The plan for the public V4 reference backend and its conformance checker. **Design only — not yet published; there is no V4 reference code to download yet.** |
+| [Reference implementation](https://docs.typewithcaret.com/reference/) | Two runnable V4 backends and conformance checkers, in [`reference/`](reference/README.md): Go (recommended) and Python, standard library only. |
 | [Migration](https://docs.typewithcaret.com/migration/) | Coming from `caret/v2`/`v3`: what changed, side-by-side serving at one base URL, cutover steps. |
 | [Cleanup (`caret-cleanup/1`)](https://docs.typewithcaret.com/cleanup/) | The published transcript-cleanup wording, versioned independently of the protocol, vendored in [`spec/cleanup/v1/`](spec/cleanup/v1/). |
 | [Imagine references](https://docs.typewithcaret.com/imagine-references/) | Generating the same person, pet, or object repeatably — a backend behavior on top of `/imagine`. |
@@ -80,8 +80,10 @@ this repository must never reference private machines, private
 repositories, or credentials), the docs structure check
 (`scripts/docs_check.py` — active pages link only to active pages,
 archived pages carry their banner, every internal link resolves), the
-cleanup-spec digest check, the unit tests for those scripts, and the
-archived V2 reference backend's hermetic test suite (archived means
+cleanup-spec digest check, the unit tests for those scripts, the V4
+reference implementations' suites (`make reference-test` on its own; the
+Go half is skipped with a notice when no Go toolchain is installed), and
+the archived V2 reference backend's hermetic test suite (archived means
 frozen, not broken). `make site` assembles the deployable static site
 into `_site/` and runs both guards against the output.
 
