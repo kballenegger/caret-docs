@@ -89,6 +89,29 @@ class CheckTests(unittest.TestCase):
         self.assertTrue(any("ARCHIVED" in f for f in findings))
         self.assertTrue(any("/migration/" in f for f in findings))
 
+    def test_assembled_site_checks_published_markdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / "agent").mkdir()
+            (site / "agent" / "instructions.md").write_text(
+                "Do not use api.typewithcaret.com."
+            )
+            findings = docs_check.check_site(site)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("agent/instructions.md", findings[0])
+        self.assertIn("api.typewithcaret.com", findings[0])
+
+    def test_published_markdown_cannot_link_to_retired_urls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / "agent").mkdir()
+            (site / "agent" / "instructions.md").write_text(
+                "See the [old guide](/legacy/)."
+            )
+            findings = docs_check.check_site(site)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("/legacy/", findings[0])
+
 
 class SharedShellTests(unittest.TestCase):
     """Every page carries the same header and sidebar."""
