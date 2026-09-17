@@ -1,28 +1,29 @@
 #!/usr/bin/env python3
-"""Docs structure guard: the V4 path is the only published path.
+"""Docs structure guard: the current caret/v4 pages are the only published pages.
 
 Deterministic, standard library only. Enforced by `make test` and
 `make site`, after the public-repo guard. The invariants:
 
-  1. The required active pages exist (overview, hosted API, protocol,
-     reference, migration, cleanup, imagine references, and the
-     retirement notice at /legacy/).
-  2. Every internal link in every docs page resolves to a file that the
+  1. The required pages exist (overview, agent instructions, protocol,
+     reference, cleanup, imagine references) and no other HTML page is
+     present. The only non-HTML page content is the agent instructions
+     Markdown, published verbatim at /agent/instructions.md.
+  2. Every internal link in every page resolves to a file that the
      assembled site will actually contain. The expected site layout is
      mirrored from the Makefile's `site` target in EXTRA_SITE_FILES.
-  3. Every active page carries the same shared shell: the header with
-     the link back to typewithcaret.com, and one sidebar whose only
-     difference between pages is which link is marked current. The
-     sidebar never lists retired material.
-  4. Retired pre-V4 URLs exist only as redirect stubs pointing at the
-     retirement notice, or as short retirement-notice files. No archived
-     page, runbook, schema or prompt is published.
-  5. Active pages never link to a retired URL (the notice itself is
-     fine), and the root README never links to a root path that moved
-     into legacy/.
+  3. Every page carries the same shared shell: the header with the link
+     back to typewithcaret.com and the mobile menu button, and one
+     sidebar whose only difference between pages is which link is
+     marked current.
+  4. Nothing retired is published or referenced. No file lives at a
+     pre-V4 URL (connect/, your-agent/, live-dictation/, legacy/,
+     migration/, agent-prompts/, integrations/, openapi.yaml), no page
+     documents the hosted service as a developer API (hosted/,
+     api.typewithcaret.com), and no page carries an archive or
+     retirement banner. The root README follows the same rules.
 
-With `--site DIR`, the same retired-path rules are applied to the
-assembled output, so a stray copy cannot reach the deploy.
+With `--site DIR`, the same rules are applied to the assembled output,
+so a stray copy cannot reach the deploy.
 
 Exit 0 means the docs tree is publishable; exit 1 lists every finding.
 """
@@ -38,17 +39,17 @@ DOCS = REPO_ROOT / "docs"
 # Pages that share the sidebar. Site URL -> file under docs/.
 ACTIVE_PAGES = {
     "/": "index.html",
-    "/hosted/": "hosted/index.html",
+    "/agent/": "agent/index.html",
     "/protocol/": "protocol/index.html",
     "/reference/": "reference/index.html",
-    "/migration/": "migration/index.html",
     "/cleanup/": "cleanup/index.html",
     "/imagine-references/": "imagine-references/index.html",
 }
 
-NOTICE_PAGE = "legacy/index.html"
+# Non-HTML files under docs/ that are published on purpose.
+PUBLISHED_FILES = ("agent/instructions.md",)
 
-REQUIRED_PAGES = tuple(ACTIVE_PAGES.values()) + (NOTICE_PAGE,)
+REQUIRED_PAGES = tuple(ACTIVE_PAGES.values()) + PUBLISHED_FILES
 
 # Files `make site` copies into _site/ from outside docs/. Site-absolute
 # paths, no leading slash. Mirror the Makefile when changing either.
@@ -56,24 +57,33 @@ EXTRA_SITE_FILES = tuple(
     "spec/cleanup/v1/" + p.name for p in sorted((REPO_ROOT / "spec/cleanup/v1").glob("*"))
 )
 
-# Retired URL space (site paths, no leading slash). Only redirect stubs
-# and retirement notices may live there, and no active page may link
-# there. The notice page itself is the one exception.
+# Retired URL space (site paths, no leading slash). Nothing may exist
+# there and nothing may link there; the old URLs answer 404.
 RETIRED_PREFIXES = (
+    "hosted/",
     "connect/",
     "your-agent/",
     "live-dictation/",
+    "migration/",
+    "legacy/",
     "agent-prompts/",
     "integrations/",
-    "legacy/",
 )
 RETIRED_EXACT = ("openapi.yaml",)
 
-STUB_MARKER = "<!-- redirect-stub -->"
-STUB_TARGET = "/legacy/"
-NOTICE_MARKER = "caret-docs: retired"
-NOTICE_PAGE_MARKER = "<!-- retired-notice -->"
-ARCHIVE_BANNER = "ARCHIVED"
+# Text that must not appear in any published page: the hosted service
+# presented as a developer API, and the archive / retirement callouts.
+FORBIDDEN_TEXT = (
+    "api.typewithcaret.com",
+    "/v2/dictionary",
+    "/v4/dictate",
+    "ARCHIVED",
+    "<!-- redirect-stub -->",
+    "<!-- retired-notice -->",
+    "caret-docs: retired",
+    "retirement notice",
+    "migration guide",
+)
 
 MAIN_SITE = "https://typewithcaret.com"
 
@@ -82,16 +92,20 @@ SIDEBAR = re.compile(r'<aside class="sidebar" id="site-nav">.*?</aside>', re.S)
 HEADER = re.compile(r'<header class="site">.*?</header>', re.S)
 CURRENT = re.compile(r'<a href="([^"]+)" aria-current="page">')
 
-# README links that would resurrect a moved root path.
+# README links that would resurrect a retired path.
 README_FORBIDDEN = (
     "](reference-backend",
     "](integrations",
     "](agent-prompts",
     "](openapi.yaml",
     "](.claude-plugin",
-    "](docs/legacy/connect",
-    "](docs/legacy/your-agent",
-    "](docs/legacy/live-dictation",
+    "](docs/hosted",
+    "](docs/migration",
+    "](docs/legacy",
+    "docs.typewithcaret.com/hosted/",
+    "docs.typewithcaret.com/migration/",
+    "docs.typewithcaret.com/legacy/",
+    "api.typewithcaret.com",
 )
 
 
@@ -103,9 +117,7 @@ def site_paths() -> set[str]:
 
 
 def is_retired(site_path: str) -> bool:
-    """True for a site path inside the retired URL space (notice excluded)."""
-    if site_path == NOTICE_PAGE:
-        return False
+    """True for a site path inside the retired URL space."""
     return site_path in RETIRED_EXACT or any(site_path.startswith(p) for p in RETIRED_PREFIXES)
 
 
@@ -137,34 +149,21 @@ def check_links(html: str, page_rel: str, known: set[str]) -> list[str]:
     return findings
 
 
-def check_retired_references(html: str, page_rel: str) -> list[str]:
+def check_retired_references(html: str, page_rel: str, label: str = "docs") -> list[str]:
     findings = []
     for link in HREF.findall(html):
         target = resolve(link, page_rel)
         if target is not None and is_retired(target):
-            findings.append(
-                f"docs/{page_rel}: active page links to retired URL {link!r}"
-            )
+            findings.append(f"{label}/{page_rel}: links to retired URL {link!r}")
     return findings
 
 
-def check_stub_target(html: str, page_rel: str) -> list[str]:
-    """Ensure a retired URL redirects to the retirement notice."""
-    targets = re.findall(r"url=(/[^\"'\s>]*)", html)
-    if targets != [STUB_TARGET]:
-        return [f"docs/{page_rel}: redirect stub must target {STUB_TARGET}, found {targets}"]
-    return []
-
-
-def check_retired_file(text: str, rel: str, label: str = "docs") -> list[str]:
-    """A file at a retired path must be a stub or a retirement notice."""
-    if rel.endswith(".html"):
-        if STUB_MARKER not in text:
-            return [f"{label}/{rel}: retired URL holds a page instead of a redirect stub"]
-        return check_stub_target(text, rel)
-    if NOTICE_MARKER not in text:
-        return [f"{label}/{rel}: retired path holds content instead of a retirement notice"]
-    return []
+def check_forbidden_text(text: str, rel: str, label: str = "docs") -> list[str]:
+    return [
+        f"{label}/{rel}: contains retired or hosted-API text {needle!r}"
+        for needle in FORBIDDEN_TEXT
+        if needle in text
+    ]
 
 
 def sidebar_of(html: str) -> str | None:
@@ -173,7 +172,7 @@ def sidebar_of(html: str) -> str | None:
 
 
 def check_shell(html: str, page_rel: str, url: str, canonical_sidebar: str) -> list[str]:
-    """The active page carries the shared header and sidebar."""
+    """The page carries the shared header and sidebar."""
     findings = []
     header = HEADER.search(html)
     if not header:
@@ -197,30 +196,31 @@ def check_shell(html: str, page_rel: str, url: str, canonical_sidebar: str) -> l
         findings.append(f"docs/{page_rel}: sidebar differs from the shared sidebar")
     for link in HREF.findall(sidebar):
         target = resolve(link, page_rel)
-        if target is not None and (is_retired(target) or target == NOTICE_PAGE):
-            findings.append(f"docs/{page_rel}: sidebar lists retired material {link!r}")
+        if target is not None and target not in ACTIVE_PAGES.values():
+            findings.append(f"docs/{page_rel}: sidebar lists a non-current page {link!r}")
     if 'src="/nav.js"' not in html:
         findings.append(f"docs/{page_rel}: missing /nav.js")
     return findings
 
 
 def check_site(site_dir: Path) -> list[str]:
-    """Apply the retired-path rules to an assembled site tree."""
+    """Apply the retired-path and forbidden-text rules to an assembled site tree."""
     findings = []
     if not site_dir.is_dir():
         return [f"{site_dir}: not a directory"]
+    label = str(site_dir)
     for path in sorted(site_dir.rglob("*")):
         if not path.is_file():
             continue
         rel = str(path.relative_to(site_dir))
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
         if is_retired(rel):
-            findings.extend(check_retired_file(text, rel, label=str(site_dir)))
-        elif rel.endswith(".html") and ARCHIVE_BANNER in text and rel != NOTICE_PAGE:
-            findings.append(f"{site_dir}/{rel}: published page carries the archive banner")
+            findings.append(f"{label}/{rel}: retired path is present in the assembled site")
+            continue
+        if not rel.endswith(".html"):
+            continue
+        text = path.read_text(encoding="utf-8")
+        findings.extend(check_forbidden_text(text, rel, label=label))
+        findings.extend(check_retired_references(text, rel, label=label))
     return findings
 
 
@@ -238,7 +238,7 @@ def main(argv: list[str] | None = None) -> int:
 
     for rel in REQUIRED_PAGES:
         if not (DOCS / rel).is_file():
-            findings.append(f"missing required active page docs/{rel}")
+            findings.append(f"missing required page docs/{rel}")
 
     canonical_sidebar = None
     overview = DOCS / ACTIVE_PAGES["/"]
@@ -252,36 +252,35 @@ def main(argv: list[str] | None = None) -> int:
         if not page.is_file():
             continue
         rel = str(page.relative_to(DOCS))
+        if is_retired(rel):
+            findings.append(f"docs/{rel}: retired path must not exist")
+            continue
         if rel.startswith("assets/") or rel in ("styles.css", "nav.js"):
             continue
+        if rel in PUBLISHED_FILES:
+            text = page.read_text(encoding="utf-8")
+            findings.extend(check_forbidden_text(text, rel))
+            continue
+        if not rel.endswith(".html"):
+            findings.append(f"docs/{rel}: unexpected file outside the published set")
+            continue
         text = page.read_text(encoding="utf-8")
-
-        if rel.endswith(".html"):
-            findings.extend(check_links(text, rel, known))
-
-        if is_retired(rel):
-            findings.extend(check_retired_file(text, rel))
-            continue
-
-        if rel == NOTICE_PAGE:
-            if NOTICE_PAGE_MARKER not in text:
-                findings.append(f"docs/{rel}: retirement notice missing {NOTICE_PAGE_MARKER}")
-            findings.extend(check_retired_references(text, rel))
-            continue
+        findings.extend(check_links(text, rel, known))
+        findings.extend(check_retired_references(text, rel))
+        findings.extend(check_forbidden_text(text, rel))
 
         if rel in files_by_rel:
-            findings.extend(check_retired_references(text, rel))
             if canonical_sidebar is None:
                 findings.append(f"docs/{rel}: no canonical sidebar (overview lacks one)")
             else:
                 findings.extend(check_shell(text, rel, files_by_rel[rel], canonical_sidebar))
-        elif rel.endswith(".html"):
-            findings.append(f"docs/{rel}: unexpected page outside the active set")
+        else:
+            findings.append(f"docs/{rel}: unexpected page outside the published set")
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     for fragment in README_FORBIDDEN:
         if fragment in readme:
-            findings.append(f"README.md: links to moved root path via {fragment!r}")
+            findings.append(f"README.md: references a retired path via {fragment!r}")
     if "docs/protocol/" not in readme:
         findings.append("README.md: does not point the reader at docs/protocol/")
 
@@ -295,11 +294,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"docs_check: {len(findings)} finding(s)", file=sys.stderr)
         return 1
     pages = len(list(DOCS.rglob("*.html")))
-    stubs = sum(1 for p in DOCS.rglob("*.html") if STUB_MARKER in p.read_text(encoding="utf-8"))
     where = f", assembled site {site_dir} clean" if site_dir is not None else ""
     print(
-        f"docs_check: ok — {len(ACTIVE_PAGES)} active pages share the shell, "
-        f"{stubs} redirect stubs, {pages} pages total, all links resolve{where}"
+        f"docs_check: ok — {pages} pages share the shell, nothing retired published, "
+        f"all links resolve{where}"
     )
     return 0
 

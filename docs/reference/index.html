@@ -25,18 +25,13 @@
     <div class="group"><span>Start</span>
       <ul>
         <li><a href="/">Overview</a></li>
+        <li><a href="/agent/">Agent instructions<small>build a backend with your coding agent</small></a></li>
       </ul>
     </div>
-    <div class="group"><span>Hosted Caret API</span>
-      <ul>
-        <li><a href="/hosted/">Hosted API<small>api.typewithcaret.com</small></a></li>
-      </ul>
-    </div>
-    <div class="group"><span>Open caret/v4 protocol</span>
+    <div class="group"><span>caret/v4</span>
       <ul>
         <li><a href="/protocol/">Protocol<small>the normative contract</small></a></li>
         <li><a href="/reference/" aria-current="page">Reference<small>Go and Python backends</small></a></li>
-        <li><a href="/migration/">Migration<small>from caret/v2 and v3</small></a></li>
         <li><a href="/cleanup/">Cleanup spec<small>caret-cleanup/1</small></a></li>
         <li><a href="/imagine-references/">Imagine references</a></li>
       </ul>
@@ -119,8 +114,8 @@ python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure
 
   <h2>Goals, in order</h2>
   <ol>
-    <li><strong>Readable before runnable.</strong> Like the archived V2
-        backend, it is meant to be read: every rule on
+    <li><strong>Readable before runnable.</strong> It is meant to be
+        read: every rule on
         <a href="/protocol/">the protocol page</a> implemented once, in an
         obvious place, in a codebase small enough to hold in your
         head.</li>
@@ -131,8 +126,7 @@ python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure
     <li><strong>Pluggable lanes, honest capabilities.</strong> Speech,
         agent, and image providers plug in behind narrow interfaces;
         whatever fails to resolve is reported off in
-        <code>/health</code> rather than papered over — the same
-        capability-routing discipline the V2 backend proved out.</li>
+        <code>/health</code> rather than papered over.</li>
     <li><strong>A conformance checker, not just a server.</strong> The
         deliverable is as much the harness that can interrogate <em>any</em>
         V4 backend as it is the backend itself.</li>
@@ -205,20 +199,11 @@ python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure
   <h2>What it is not</h2>
   <ul>
     <li>Not a hosted service, not a relay — the protocol has no privileged
-        party, and neither does the reference.</li>
-    <li>Not the <a href="/hosted/">hosted Caret API</a>. That service
-        speaks a different wire (<code>/v4/dictate</code>, sequence
-        headers, acks, resume) and answers health with
-        <code>contract</code> rather than <code>protocol</code>. The
-        checker will not pass against <code>api.typewithcaret.com</code>,
-        and the app's Caret API mode will not connect to these backends;
-        use Your Agent mode.</li>
+        party, and neither does the reference. Point the app at it in
+        Your Agent mode.</li>
     <li>Not a fork target for the cleanup wording: the spec is consumed
         as data from <a href="/cleanup/"><code>spec/cleanup/v1/</code></a>,
         digest-checked.</li>
-    <li>Not a V2 compatibility layer. Operators who need V2 during cutover
-        run the archived backend beside it — see
-        <a href="/migration/">migration</a>.</li>
   </ul>
 
   <h2>What the loopback providers are not</h2>

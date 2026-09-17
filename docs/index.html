@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Caret Docs: the hosted Caret API and the caret/v4 protocol</title>
-<meta name="description" content="Caret, the agentic iOS keyboard, talks to one of three backends: on-device, the hosted Caret API, or a backend you run on the open caret/v4 protocol. This site documents the hosted wire and the open protocol, with runnable reference backends.">
+<title>Caret Docs: the caret/v4 protocol for your own backend</title>
+<meta name="description" content="Caret, the agentic iOS keyboard, can talk to a backend you run yourself over the open caret/v4 protocol. This site is the protocol contract, with runnable reference backends in Go and Python.">
 <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
 </head>
@@ -25,18 +25,13 @@
     <div class="group"><span>Start</span>
       <ul>
         <li><a href="/" aria-current="page">Overview</a></li>
+        <li><a href="/agent/">Agent instructions<small>build a backend with your coding agent</small></a></li>
       </ul>
     </div>
-    <div class="group"><span>Hosted Caret API</span>
-      <ul>
-        <li><a href="/hosted/">Hosted API<small>api.typewithcaret.com</small></a></li>
-      </ul>
-    </div>
-    <div class="group"><span>Open caret/v4 protocol</span>
+    <div class="group"><span>caret/v4</span>
       <ul>
         <li><a href="/protocol/">Protocol<small>the normative contract</small></a></li>
         <li><a href="/reference/">Reference<small>Go and Python backends</small></a></li>
-        <li><a href="/migration/">Migration<small>from caret/v2 and v3</small></a></li>
         <li><a href="/cleanup/">Cleanup spec<small>caret-cleanup/1</small></a></li>
         <li><a href="/imagine-references/">Imagine references</a></li>
       </ul>
@@ -45,17 +40,15 @@
 </aside>
 
 <main class="wrap" id="content" tabindex="-1">
-  <p class="kicker">Hosted Caret API · open caret/v4 protocol</p>
+  <p class="kicker">Your Agent · the caret/v4 protocol</p>
   <h1>Your keyboard, your agent, your machine.</h1>
   <p class="lead">
     Caret is a compose surface for iOS: speak or type an intent at the
-    cursor, preview, insert a finished message. Everything beyond
-    on-device recognition happens by talking to a backend. There are two
-    to choose from: the hosted Caret API, where you paste a key and
-    dictate, and any backend you run yourself on the open
-    <code>caret/v4</code> protocol, where you enter a base URL and a
-    credential and no third party sits in the middle of your typing. This
-    site documents both wires.
+    cursor, preview, insert a finished message. In Your Agent mode the
+    keyboard talks to a backend you run yourself over the open
+    <code>caret/v4</code> protocol: you enter a base URL and a credential,
+    and no third party sits in the middle of your typing. This site is
+    that protocol, plus two reference backends you can run today.
   </p>
 
   <h2>Three backend modes</h2>
@@ -69,9 +62,9 @@
     </tr>
     <tr>
       <td>Caret API</td>
-      <td>An API key from <a href="https://typewithcaret.com/signup">typewithcaret.com/signup</a></td>
-      <td>Hosted dictation at <code>api.typewithcaret.com</code> with a server-side dictionary. Dictate only.</td>
-      <td><a href="/hosted/">Hosted API</a></td>
+      <td>Your Caret account</td>
+      <td>Caret's own hosted dictation, set up inside the app. Not a developer API.</td>
+      <td>Nothing to document</td>
     </tr>
     <tr>
       <td>Your Agent</td>
@@ -79,21 +72,6 @@
       <td>Whatever your backend advertises on <code>/health</code>: dictate always, ask and imagine when wired.</td>
       <td><a href="/protocol/">Protocol</a>, <a href="/reference/">Reference</a></td>
     </tr>
-  </table>
-
-  <h2>Telling the two wires apart</h2>
-  <p>
-    Both backends call themselves <code>caret/v4</code> and a client tells
-    them apart by the key in the health body, never by guessing. The Caret
-    app does this on every connection; your client should too.
-  </p>
-  <table>
-    <tr><th></th><th>Hosted Caret API</th><th>Open caret/v4 backend</th></tr>
-    <tr><td>Health</td><td><code>GET /health</code> or <code>GET /v4/health</code></td><td><code>GET /health</code></td></tr>
-    <tr><td>Discriminator</td><td><code>"contract": "caret/v4"</code></td><td><code>"protocol": "caret/v4"</code></td></tr>
-    <tr><td>Routes</td><td><code>wss /v4/dictate</code>; root <code>/dictate</code> is 404</td><td><code>wss /dictate</code>, <code>/ask</code>, <code>/imagine</code></td></tr>
-    <tr><td>Start frame version</td><td><code>"protocol": 2</code></td><td><code>"protocol": 4</code></td></tr>
-    <tr><td>Auth</td><td colspan="2"><code>Authorization: Bearer &lt;key&gt;</code> on the upgrade; failure is close 4401</td></tr>
   </table>
 
   <div class="card">
@@ -113,6 +91,18 @@
   </div>
 
   <div class="card">
+    <h3>Have your agent build it<span class="pill">one URL</span></h3>
+    <p>
+      Give a coding agent
+      <a href="/agent/instructions.md"><code>docs.typewithcaret.com/agent/instructions.md</code></a>
+      and it has the questions to ask you, the reference backend to run,
+      how to wire a real recognizer, and the checks it must pass before
+      it says the backend works.
+    </p>
+    <p><a href="/agent/"><strong>Agent instructions →</strong></a></p>
+  </div>
+
+  <div class="card">
     <h3>Any client, any backend<span class="pill">no privileged party</span></h3>
     <p>
       The Caret keyboard is one client of this protocol, not its owner.
@@ -126,20 +116,7 @@
     <p><a href="/reference/"><strong>The reference implementation →</strong></a></p>
   </div>
 
-  <div class="card">
-    <h3>The hosted Caret API<span class="pill">dictate only</span></h3>
-    <p>
-      The service behind the app's Caret API mode. One WebSocket route,
-      <code>/v4/dictate</code>, with Opus or PCM16 audio, per-frame
-      sequence numbers, acknowledgements and a 45 second resume window,
-      plus a small REST dictionary at <code>/v2/dictionary</code>. It does
-      not serve Ask or Imagine, and it is not the open protocol; the page
-      spells out every difference.
-    </p>
-    <p><a href="/hosted/"><strong>Read the hosted API contract →</strong></a></p>
-  </div>
-
-  <h2>The three routes of the open protocol</h2>
+  <h2>The three routes</h2>
   <table>
     <tr><th>Route</th><th>What happens</th><th>Terminal result</th></tr>
     <tr>
@@ -174,8 +151,8 @@
   <h2>Why a live socket</h2>
   <ul>
     <li><strong>You see your words as you say them.</strong> Every route
-        streams cumulative partial transcripts while the user speaks —
-        latency the pre-V4 REST upload cycle could not offer.</li>
+        streams cumulative partial transcripts while the user speaks, so
+        the text is on screen before the sentence ends.</li>
     <li><strong>One lifecycle to implement.</strong> The routes differ only
         in their finalizer and their typed result; the connection handling,
         audio framing, reliability rules, and error table are identical
@@ -195,7 +172,7 @@
       source: the transcript travels as inert data, meaning is preserved
       completely, only formatting changes, and a failed cleanup returns
       the raw transcript. The spec is versioned independently of the
-      protocol and is unchanged in V4 — V4 adds per-operation
+      protocol; V4 adds per-operation
       <a href="/protocol/#7">vocabulary injection</a> into its
       glossary.
     </p>
@@ -203,12 +180,11 @@
        <a href="/spec/cleanup/v1/prompt.md">prompt.md</a></p>
   </div>
 
-  <h2>Design principles of the open protocol</h2>
+  <h2>Design principles</h2>
   <ul>
     <li><strong>No privileged server.</strong> In Your Agent mode the
         keyboard talks to the base URL and credential you enter. Any
-        server that implements <code>caret/v4</code> works; the hosted
-        service is one more backend, not a required one.</li>
+        server that implements <code>caret/v4</code> works.</li>
     <li><strong>Capabilities are honest.</strong> <code>/health</code>
         declares what you actually serve, per route and per input mode; the
         keyboard hides the rest rather than failing in the user's
@@ -224,18 +200,6 @@
         ignored on both sides; breaking changes take a new protocol
         number, not a silent shape change.</li>
   </ul>
-
-  <h2>Coming from V2 or V3?</h2>
-  <p>
-    <code>caret/v2</code> and <code>caret/v3</code> are retired. The
-    <a href="/migration/">migration guide</a> maps every old concept to its
-    V4 replacement and shows how to serve both contracts at one base URL
-    during cutover — the paths do not collide. The pre-V4 documentation
-    is no longer published; old URLs show a short
-    <a href="/legacy/">retirement notice</a>, and the archived material
-    stays in the repository under
-    <a href="https://github.com/kballenegger/caret-docs/tree/main/legacy"><code>legacy/</code></a>.
-  </p>
 
   <p class="note">
     This documentation and the reference material are

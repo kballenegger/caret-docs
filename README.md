@@ -1,4 +1,4 @@
-# Caret — the hosted Caret API and the caret/v4 any-agent protocol
+# Caret — the caret/v4 any-agent protocol
 
 Caret is an iOS keyboard. Beyond on-device recognition, everything it
 does it does by talking to a backend, and the app offers three modes:
@@ -6,7 +6,7 @@ does it does by talking to a backend, and the app offers three modes:
 | Mode | Backend | Documented at |
 | --- | --- | --- |
 | Offline | On-device speech recognition. Nothing to configure. | nothing to document |
-| Caret API | The hosted service at `api.typewithcaret.com`. Paste a key, dictate. Dictate only. | [`docs/hosted/`](docs/hosted/index.html), <https://docs.typewithcaret.com/hosted/> |
+| Caret API | Caret's own hosted dictation, set up inside the app. Not a developer API. | nothing to document |
 | Your Agent | A backend you run on the open `caret/v4` protocol: a base URL and a credential, no account, no relay, no third party in the middle of your typing. | [`docs/protocol/`](docs/protocol/index.html), <https://docs.typewithcaret.com/protocol/> |
 
 The open contract is **`caret/v4`**: one base URL serving three
@@ -16,15 +16,7 @@ live-audio lifecycle, with health and capability discovery on
 backend may implement it, and two conforming implementations
 interoperate without ever having met.
 
-The hosted service also calls itself `caret/v4` but is a different wire:
-it answers health with `"contract": "caret/v4"` (the open protocol says
-`"protocol"`), dictates on `wss /v4/dictate` with sequence-numbered Opus
-or PCM16 frames, acks and resume, and keeps a per-account dictionary at
-`/v2/dictionary`. Auth on both is `Authorization: Bearer <key>`; the old
-hosted client-proof scheme is gone. The hosted page lists every
-difference.
-
-This repository is the public home of both.
+This repository is the public home of that protocol.
 
 > **License notice:** this repository is **source-available, not open
 > source**. You may use, copy, and modify it to configure, run, or extend
@@ -62,25 +54,11 @@ a replay from becoming a second bill.
 
 | Page | What it covers |
 | --- | --- |
-| [Overview](https://docs.typewithcaret.com/) | The three backend modes, how to tell the two wires apart, and the design principles. |
-| [Hosted Caret API](https://docs.typewithcaret.com/hosted/) | The `api.typewithcaret.com` contract: Bearer auth, `/health` and `/v4/health`, the `/v4/dictate` lifecycle, errors and close codes, limits, `/v2/dictionary`. |
+| [Overview](https://docs.typewithcaret.com/) | The three backend modes and the design principles. |
+| [Agent instructions](https://docs.typewithcaret.com/agent/) | One URL to give a coding agent so it builds and verifies a self-hosted backend: the plain-Markdown source is [`docs/agent/instructions.md`](docs/agent/instructions.md), published at <https://docs.typewithcaret.com/agent/instructions.md>. |
 | [Reference implementation](https://docs.typewithcaret.com/reference/) | Two runnable V4 backends and conformance checkers, in [`reference/`](reference/README.md): Go (recommended) and Python, standard library only. |
-| [Migration](https://docs.typewithcaret.com/migration/) | Coming from `caret/v2`/`v3`: what changed, side-by-side serving at one base URL, cutover steps. |
 | [Cleanup (`caret-cleanup/1`)](https://docs.typewithcaret.com/cleanup/) | The published transcript-cleanup wording, versioned independently of the protocol, vendored in [`spec/cleanup/v1/`](spec/cleanup/v1/). |
 | [Imagine references](https://docs.typewithcaret.com/imagine-references/) | Generating the same person, pet, or object repeatably — a backend behavior on top of `/imagine`. |
-
-## Legacy: everything pre-V4
-
-`caret/v2` (REST) and `caret/v3` (the optional live-dictation WebSocket)
-are retired, and their documentation is no longer published. Everything
-that documented them — the implementation guide, the connect runbooks,
-`openapi.yaml`, the V2 reference backend and its conformance checker,
-the packaged Claude Code plugin and Hermes skill, the agent prompts — is
-preserved under [`legacy/`](legacy/README.md) in this repository. On the
-docs site every old URL, including the former `/legacy/…` copies,
-answers with a short retirement notice at
-<https://docs.typewithcaret.com/legacy/> that points at the current
-pages. Nothing in the archive applies to V4 except as history.
 
 ## Checking a change to this repository
 
@@ -93,14 +71,13 @@ make test
 That runs, in order: the public-repo guard (`scripts/public_guard.py` —
 this repository must never reference private machines, private
 repositories, or credentials), the docs structure check
-(`scripts/docs_check.py` — active pages share one header and sidebar,
-link only to active pages, retired URLs hold only redirect stubs and
-retirement notices, every internal link resolves), the
-cleanup-spec digest check, the unit tests for those scripts, the V4
-reference implementations' suites (`make reference-test` on its own; the
-Go half is skipped with a notice when no Go toolchain is installed), and
-the archived V2 reference backend's hermetic test suite (archived means
-frozen, not broken). `make site` assembles the deployable static site
+(`scripts/docs_check.py` — every page shares one header and sidebar,
+nothing outside the current page set is published, every internal link
+resolves), the cleanup-spec digest check, the unit tests for those
+scripts, the V4 reference implementations' suites (`make reference-test`
+on its own; the Go half is skipped with a notice when no Go toolchain is
+installed), and the hermetic test suite of the pre-V4 backend kept under
+`legacy/` for history. `make site` assembles the deployable static site
 into `_site/` and runs both guards against the output.
 
 ## License

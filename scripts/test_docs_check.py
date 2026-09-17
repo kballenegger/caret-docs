@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -23,12 +24,12 @@ class ResolveTests(unittest.TestCase):
 
     def test_absolute_file_link(self):
         self.assertEqual(
-            docs_check.resolve("/legacy/openapi.yaml", "legacy/your-agent/index.html"),
-            "legacy/openapi.yaml",
+            docs_check.resolve("/spec/cleanup/v1/prompt.md", "cleanup/index.html"),
+            "spec/cleanup/v1/prompt.md",
         )
 
     def test_root_link(self):
-        self.assertEqual(docs_check.resolve("/", "migration/index.html"), "index.html")
+        self.assertEqual(docs_check.resolve("/", "reference/index.html"), "index.html")
 
 
 class CheckTests(unittest.TestCase):
@@ -38,16 +39,21 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertIn("/nowhere/", findings[0])
 
-    def test_redirect_stub_must_target_the_retirement_notice(self):
-        html = '<meta http-equiv="refresh" content="0; url=/legacy/connect/">'
-        findings = docs_check.check_stub_target(html, "connect/index.html")
-        self.assertEqual(len(findings), 1)
-        self.assertIn("/legacy/", findings[0])
-        ok = '<meta http-equiv="refresh" content="0; url=/legacy/">'
-        self.assertEqual(docs_check.check_stub_target(ok, "connect/index.html"), [])
+    def test_retired_paths_are_recognized(self):
+        for path in ("hosted/index.html", "migration/index.html", "legacy/index.html",
+                     "your-agent/index.html", "live-dictation/index.html",
+                     "connect/hermes/index.html", "openapi.yaml",
+                     "agent-prompts/connect-caret.md",
+                     "integrations/hermes/caret-connect/SKILL.md"):
+            with self.subTest(path=path):
+                self.assertTrue(docs_check.is_retired(path))
+        for path in docs_check.ACTIVE_PAGES.values():
+            with self.subTest(path=path):
+                self.assertFalse(docs_check.is_retired(path))
 
-    def test_retired_url_is_flagged_on_active_pages(self):
-        for link in ("/your-agent/", "/legacy/your-agent/", "/openapi.yaml",
+    def test_link_to_a_retired_url_is_flagged(self):
+        for link in ("/hosted/", "/migration/", "/legacy/", "/your-agent/",
+                     "/legacy/your-agent/", "/openapi.yaml",
                      "/agent-prompts/connect-caret.md",
                      "/integrations/hermes/caret-connect/SKILL.md"):
             with self.subTest(link=link):
@@ -55,39 +61,42 @@ class CheckTests(unittest.TestCase):
                 findings = docs_check.check_retired_references(html, "index.html")
                 self.assertEqual(len(findings), 1)
 
-    def test_the_notice_itself_is_not_retired(self):
-        html = '<a href="/legacy/">retired</a>'
-        self.assertEqual(docs_check.check_retired_references(html, "index.html"), [])
+    def test_hosted_api_and_retirement_text_are_flagged(self):
+        for needle in ("api.typewithcaret.com", "/v2/dictionary", "/v4/dictate",
+                       "ARCHIVED", "<!-- redirect-stub -->", "retirement notice"):
+            with self.subTest(needle=needle):
+                findings = docs_check.check_forbidden_text(f"<p>{needle}</p>", "index.html")
+                self.assertEqual(len(findings), 1)
+        self.assertEqual(docs_check.check_forbidden_text("<p>caret/v4</p>", "index.html"), [])
 
-    def test_retired_path_accepts_only_stubs_and_notices(self):
-        page = "<!doctype html><!-- redirect-stub --><meta http-equiv=\"refresh\" content=\"0; url=/legacy/\">"
-        self.assertEqual(docs_check.check_retired_file(page, "connect/index.html"), [])
-        self.assertEqual(len(docs_check.check_retired_file("<h1>Runbook</h1>", "connect/index.html")), 1)
-        self.assertEqual(docs_check.check_retired_file("# Retired\ncaret-docs: retired\n", "openapi.yaml"), [])
-        self.assertEqual(len(docs_check.check_retired_file("openapi: 3.0.0\n", "openapi.yaml")), 1)
-
-    def test_assembled_site_rejects_archived_content(self):
-        import tempfile
-        from pathlib import Path as P
+    def test_assembled_site_rejects_retired_paths_and_hosted_text(self):
         with tempfile.TemporaryDirectory() as tmp:
-            site = P(tmp)
-            (site / "legacy" / "your-agent").mkdir(parents=True)
-            (site / "legacy" / "your-agent" / "index.html").write_text("<p>ARCHIVED guide</p>")
+            site = Path(tmp)
+            (site / "legacy").mkdir()
+            (site / "legacy" / "index.html").write_text("<p>retired</p>")
+            (site / "hosted").mkdir()
+            (site / "hosted" / "index.html").write_text("<p>hosted</p>")
             (site / "protocol").mkdir()
-            (site / "protocol" / "index.html").write_text("<p>ARCHIVED banner on an active page</p>")
+            (site / "protocol" / "index.html").write_text(
+                '<p>ARCHIVED banner</p><a href="/migration/">old</a>'
+            )
+            (site / "reference").mkdir()
+            (site / "reference" / "index.html").write_text("<p>fine</p>")
             findings = docs_check.check_site(site)
-        self.assertEqual(len(findings), 2)
-        self.assertTrue(any("your-agent" in f for f in findings))
-        self.assertTrue(any("protocol" in f for f in findings))
+        self.assertEqual(len(findings), 4)
+        self.assertTrue(any("legacy/index.html" in f for f in findings))
+        self.assertTrue(any("hosted/index.html" in f for f in findings))
+        self.assertTrue(any("ARCHIVED" in f for f in findings))
+        self.assertTrue(any("/migration/" in f for f in findings))
 
 
 class SharedShellTests(unittest.TestCase):
-    """Every active page carries the same header and sidebar."""
+    """Every page carries the same header and sidebar."""
 
     def _html(self, rel):
         return (docs_check.DOCS / rel).read_text(encoding="utf-8")
 
-    def test_every_active_page_marks_itself_current_and_matches_the_overview(self):
+    def test_every_page_marks_itself_current_and_matches_the_overview(self):
         canonical = docs_check.sidebar_of(self._html("index.html")).replace(' aria-current="page"', "")
         for url, rel in docs_check.ACTIVE_PAGES.items():
             with self.subTest(page=rel):
@@ -99,55 +108,26 @@ class SharedShellTests(unittest.TestCase):
         sidebar = docs_check.sidebar_of(self._html("index.html"))
         links = docs_check.HREF.findall(sidebar)
         self.assertEqual(sorted(links), sorted(docs_check.ACTIVE_PAGES))
+        self.assertNotIn("Hosted", sidebar)
+        self.assertNotIn("Migration", sidebar)
 
     def test_wrong_current_link_is_flagged(self):
-        html = self._html("hosted/index.html")
+        html = self._html("reference/index.html")
         canonical = docs_check.sidebar_of(html).replace(' aria-current="page"', "")
-        findings = docs_check.check_shell(html, "hosted/index.html", "/protocol/", canonical)
+        findings = docs_check.check_shell(html, "reference/index.html", "/protocol/", canonical)
         self.assertTrue(any("current" in f for f in findings))
 
     def test_sidebar_with_retired_link_is_flagged(self):
-        html = self._html("index.html").replace('<a href="/protocol/">', '<a href="/legacy/your-agent/">', 1)
+        html = self._html("index.html").replace('<a href="/protocol/">', '<a href="/hosted/">', 1)
         canonical = docs_check.sidebar_of(html).replace(' aria-current="page"', "")
         findings = docs_check.check_shell(html, "index.html", "/", canonical)
-        self.assertTrue(any("retired" in f for f in findings))
+        self.assertTrue(any("non-current" in f for f in findings))
 
     def test_header_links_back_to_the_main_site(self):
         for rel in docs_check.ACTIVE_PAGES.values():
             header = docs_check.HEADER.search(self._html(rel)).group(0)
             self.assertIn('href="https://typewithcaret.com"', header)
             self.assertIn('aria-expanded="false"', header)
-
-    def test_notice_page_shares_the_shell_without_a_current_link(self):
-        html = self._html(docs_check.NOTICE_PAGE)
-        self.assertIn(docs_check.NOTICE_PAGE_MARKER, html)
-        self.assertEqual(html.count('aria-current="page"'), 0)
-        canonical = docs_check.sidebar_of(self._html("index.html")).replace(' aria-current="page"', "")
-        self.assertEqual(docs_check.sidebar_of(html), canonical)
-
-
-class HostedPageTests(unittest.TestCase):
-    page = docs_check.DOCS / "hosted/index.html"
-
-    def test_hosted_page_is_required_and_present(self):
-        self.assertIn("hosted/index.html", docs_check.REQUIRED_PAGES)
-        self.assertTrue(self.page.is_file())
-
-    def test_hosted_page_names_both_contract_discriminators(self):
-        html = self.page.read_text(encoding="utf-8")
-        self.assertIn('"contract": "caret/v4"', html)
-        self.assertIn('"protocol": "caret/v4"', html)
-        self.assertIn("/v4/dictate", html)
-        self.assertIn("/dictate", html)
-
-    def test_hosted_page_documents_current_auth_and_fallback(self):
-        html = " ".join(self.page.read_text(encoding="utf-8").split())
-        self.assertIn("Authorization: Bearer", html)
-        self.assertIn("No query parameter", html)
-        self.assertIn("no WebSocket subprotocol", html)
-        self.assertIn("no signed proof", html)
-        self.assertIn("Unknown codes close with 4500", html)
-        self.assertIn("524 288 bytes", html)
 
 
 class NavigationAssetTests(unittest.TestCase):
@@ -171,53 +151,71 @@ class NavigationAssetTests(unittest.TestCase):
         self.assertIn('root.classList.add("js")', self.js)
 
 
-class HostedCompatibilityTests(unittest.TestCase):
-    page = docs_check.DOCS / "hosted/index.html"
+class AgentInstructionsTests(unittest.TestCase):
+    """The Markdown a person hands their coding agent."""
 
-    def test_hosted_dictionary_keeps_its_supported_v2_route(self):
-        html = self.page.read_text(encoding="utf-8")
-        self.assertIn("</span> /v2/dictionary", html)
-        self.assertIn("This is the one path that kept its <code>/v2/</code> prefix", html)
-        self.assertNotIn("/v2/dictate", html)
+    md = (docs_check.DOCS / "agent/instructions.md").read_text(encoding="utf-8")
+    landing = (docs_check.DOCS / "agent/index.html").read_text(encoding="utf-8")
 
-    def test_hosted_and_open_protocol_use_distinct_discriminators(self):
-        html = self.page.read_text(encoding="utf-8")
-        self.assertIn('"contract": "caret/v4"', html)
-        self.assertIn('"protocol": "caret/v4"', html)
-        self.assertIn("The keys differ on purpose", html)
+    def test_published_and_linked_from_the_landing_page(self):
+        self.assertIn("agent/instructions.md", docs_check.REQUIRED_PAGES)
+        self.assertIn('href="/agent/instructions.md"', self.landing)
+        self.assertIn("https://docs.typewithcaret.com/agent/instructions.md", self.md)
+
+    def test_points_at_the_current_spec_and_reference(self):
+        self.assertIn("https://docs.typewithcaret.com/protocol/", self.md)
+        self.assertIn("github.com/kballenegger/caret-docs/tree/main/reference", self.md)
+        for section in ("Ask before you build", "Loopback is not transcription",
+                        "Protect secrets", "Verify before you say it works"):
+            self.assertIn(section, self.md)
+
+    def test_every_command_names_a_path_that_exists(self):
+        for rel in ("reference/go/cmd/caret-v4-backend", "reference/go/cmd/caret-v4-conform",
+                    "reference/python/caret_v4/__main__.py", "spec/cleanup/v1/manifest.json"):
+            self.assertTrue((docs_check.REPO_ROOT / rel).exists(), rel)
+        for flag in ("-keys", "-stt", "-agent", "-cleanup", "-tls-cert", "-cleanup-spec-dir"):
+            self.assertIn(flag, self.md)
+        for flag in ("--keys", "--stt", "--tls-cert", "--insecure-skip-verify"):
+            self.assertIn(flag, self.md)
+
+    def test_no_hosted_or_old_version_material(self):
+        self.assertEqual(docs_check.check_forbidden_text(self.md, "agent/instructions.md"), [])
+        for needle in ("caret/v2", "caret/v3", "/hosted/", "/migration/", "/legacy/"):
+            self.assertNotIn(needle, self.md)
+        self.assertIn("not a developer API", self.md)
 
 
 class RepoTests(unittest.TestCase):
     def test_the_docs_tree_passes(self):
         self.assertEqual(docs_check.main([]), 0)
 
-    def test_no_archived_pages_remain_under_docs(self):
-        for page in docs_check.DOCS.rglob("*.html"):
-            rel = str(page.relative_to(docs_check.DOCS))
-            text = page.read_text(encoding="utf-8")
-            if docs_check.is_retired(rel):
-                self.assertIn(docs_check.STUB_MARKER, text, rel)
-            else:
-                self.assertNotIn("ARCHIVED —", text, rel)
+    def test_only_the_current_pages_exist_under_docs(self):
+        pages = sorted(str(p.relative_to(docs_check.DOCS)) for p in docs_check.DOCS.rglob("*.html"))
+        self.assertEqual(pages, sorted(docs_check.ACTIVE_PAGES.values()))
 
-    def test_every_retired_html_route_redirects_to_the_notice(self):
-        retired_html = [
-            page for page in docs_check.DOCS.rglob("*.html")
-            if docs_check.is_retired(str(page.relative_to(docs_check.DOCS)))
-        ]
-        self.assertGreaterEqual(len(retired_html), 18)
-        for page in retired_html:
-            rel = str(page.relative_to(docs_check.DOCS))
-            text = page.read_text(encoding="utf-8")
-            self.assertEqual(docs_check.check_retired_file(text, rel), [], rel)
+    def test_no_retired_path_exists_under_docs(self):
+        for path in docs_check.DOCS.rglob("*"):
+            rel = str(path.relative_to(docs_check.DOCS))
+            self.assertFalse(docs_check.is_retired(rel), rel)
 
-    def test_retired_prompt_and_schema_paths_are_notices(self):
-        for rel in ("openapi.yaml", "legacy/openapi.yaml",
-                    "agent-prompts/connect-caret.md",
-                    "integrations/hermes/caret-connect/SKILL.md"):
+    def test_no_page_documents_the_hosted_service_or_old_versions(self):
+        for rel in docs_check.ACTIVE_PAGES.values():
             text = (docs_check.DOCS / rel).read_text(encoding="utf-8")
-            self.assertIn(docs_check.NOTICE_MARKER, text, rel)
-            self.assertLess(len(text.splitlines()), 15, rel)
+            with self.subTest(page=rel):
+                self.assertEqual(docs_check.check_forbidden_text(text, rel), [])
+                self.assertNotIn("caret/v2", text)
+                self.assertNotIn("caret/v3", text)
+                self.assertNotIn('"contract"', text)
+
+    def test_overview_does_not_present_hosted_dictation_as_a_developer_api(self):
+        text = (docs_check.DOCS / "index.html").read_text(encoding="utf-8")
+        self.assertIn("Not a developer API", text)
+        self.assertNotIn("typewithcaret.com/signup", text)
+
+    def test_readme_matches_the_published_set(self):
+        readme = (docs_check.REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        for fragment in docs_check.README_FORBIDDEN:
+            self.assertNotIn(fragment, readme)
 
 
 if __name__ == "__main__":

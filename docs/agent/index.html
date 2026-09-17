@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent instructions: build a self-hosted Caret backend</title>
+<meta name="description" content="One stable URL to hand a coding agent so it builds, configures and verifies a self-hosted caret/v4 backend for the Caret iOS keyboard, using the public protocol and reference implementations.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="site">
+  <div class="bar">
+    <img src="/assets/caret-mark.svg" alt="">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <button class="menu" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <a class="home" href="https://typewithcaret.com">typewithcaret.com &rarr;</a>
+  </div>
+</header>
+
+<div class="layout">
+<aside class="sidebar" id="site-nav">
+  <nav aria-label="Documentation">
+    <div class="group"><span>Start</span>
+      <ul>
+        <li><a href="/">Overview</a></li>
+        <li><a href="/agent/" aria-current="page">Agent instructions<small>build a backend with your coding agent</small></a></li>
+      </ul>
+    </div>
+    <div class="group"><span>caret/v4</span>
+      <ul>
+        <li><a href="/protocol/">Protocol<small>the normative contract</small></a></li>
+        <li><a href="/reference/">Reference<small>Go and Python backends</small></a></li>
+        <li><a href="/cleanup/">Cleanup spec<small>caret-cleanup/1</small></a></li>
+        <li><a href="/imagine-references/">Imagine references</a></li>
+      </ul>
+    </div>
+  </nav>
+</aside>
+
+<main class="wrap" id="content" tabindex="-1">
+  <p class="kicker">Your Agent · instructions for a coding agent</p>
+  <h1>Have your agent build the backend.</h1>
+  <p class="lead">
+    You do not have to write a Caret backend by hand. Give your coding
+    agent one URL and it has everything it needs: the protocol, the
+    reference implementations, the questions to ask you first, how to
+    wire a real recognizer, and how to prove the result works before it
+    says so.
+  </p>
+
+  <div class="note">
+    <strong>The URL to give your agent.</strong>
+    <p style="margin:0.4rem 0 0">
+      <a href="/agent/instructions.md"><code>https://docs.typewithcaret.com/agent/instructions.md</code></a>
+    </p>
+    <p style="margin:0.4rem 0 0">
+      Plain Markdown, no HTML, stable. Paste it into any agent that can
+      fetch a URL, or download it and drop it into the agent's context.
+    </p>
+  </div>
+
+  <h2>What to say</h2>
+  <p>Something like this is enough:</p>
+  <pre><code>Build me a self-hosted backend for the Caret iOS keyboard.
+Follow https://docs.typewithcaret.com/agent/instructions.md exactly.
+Ask me the setup questions in section 2 before you start.</code></pre>
+
+  <h2>What the instructions cover</h2>
+  <table>
+    <tr><th>Section</th><th>What the agent does</th></tr>
+    <tr><td>1 · What a backend is</td>
+        <td>The routes, the shared lifecycle, what is mandatory and what is optional, when HTTPS is required.</td></tr>
+    <tr><td>2 · Ask before you build</td>
+        <td>Language and runtime, where it runs and how the phone reaches it, which recognizer and model, credentials, supervision.</td></tr>
+    <tr><td>3 · Stand up the reference</td>
+        <td>Clone the public repository, run the Go or Python reference backend, run the conformance checker against it.</td></tr>
+    <tr><td>4 · Configure it</td>
+        <td>Flags and environment variables, the lane grammar for real speech, agent, image and cleanup providers.</td></tr>
+    <tr><td>5 · Loopback is not transcription</td>
+        <td>Why a backend that passes the checker on loopback is still not done.</td></tr>
+    <tr><td>6 · Protect secrets</td>
+        <td>Random credentials, no secrets on the command line or in logs, nothing of yours leaves your machine.</td></tr>
+    <tr><td>7 · Verify before you say it works</td>
+        <td>Health, conformance with the real credential, a real dictated sentence through the app, a restart.</td></tr>
+    <tr><td>8 · From scratch</td>
+        <td>Only on request: build against the protocol page with the reference as the executable specification.</td></tr>
+  </table>
+
+  <h2>What it is grounded in</h2>
+  <p>
+    The instructions do not restate the protocol; they point the agent at
+    <a href="/protocol/">the protocol page</a> and at the
+    <a href="/reference/">reference backends</a>, and tell it to read the
+    implementation whenever a rule is unclear rather than guess. Every
+    command in them runs against the public repository as published.
+    When the protocol or the reference changes, the instructions change
+    with them at the same URL.
+  </p>
+
+  <h2>What it will not do</h2>
+  <ul>
+    <li>Touch Caret's own hosted dictation. That is set up inside the app
+        and is not a developer API.</li>
+    <li>Declare success on the loopback fixture, or without a real
+        sentence dictated through the app.</li>
+    <li>Put a credential, a provider key or a transcript into a log, a
+        commit, or its own report.</li>
+  </ul>
+</main>
+</div>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret, the agentic iOS keyboard.</span>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="https://github.com/kballenegger/caret-docs">Source on GitHub</a>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
+  </div>
+</footer>
+<script src="/nav.js" defer></script>
+</body>
+</html>

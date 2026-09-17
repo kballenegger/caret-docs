@@ -25,18 +25,13 @@
     <div class="group"><span>Start</span>
       <ul>
         <li><a href="/">Overview</a></li>
+        <li><a href="/agent/">Agent instructions<small>build a backend with your coding agent</small></a></li>
       </ul>
     </div>
-    <div class="group"><span>Hosted Caret API</span>
-      <ul>
-        <li><a href="/hosted/">Hosted API<small>api.typewithcaret.com</small></a></li>
-      </ul>
-    </div>
-    <div class="group"><span>Open caret/v4 protocol</span>
+    <div class="group"><span>caret/v4</span>
       <ul>
         <li><a href="/protocol/">Protocol<small>the normative contract</small></a></li>
         <li><a href="/reference/">Reference<small>Go and Python backends</small></a></li>
-        <li><a href="/migration/">Migration<small>from caret/v2 and v3</small></a></li>
         <li><a href="/cleanup/" aria-current="page">Cleanup spec<small>caret-cleanup/1</small></a></li>
         <li><a href="/imagine-references/">Imagine references</a></li>
       </ul>
@@ -73,9 +68,8 @@
     <code>"polish": false</code>, runs one cleanup pass over the result.
     Cleanup is a plain text-in, text-out call: no tools, no browsing, no
     conversation, no memory of the last dictation. A cleanup that fails
-    returns the raw transcript, never an error — and the spec itself is
-    versioned independently of the protocol (<code>caret-cleanup/1</code>
-    served V2 unchanged and serves V4 unchanged).
+    returns the raw transcript, never an error. The spec is versioned
+    independently of the protocol as <code>caret-cleanup/1</code>.
   </p>
 
   <h2>The transcript is inert data</h2>
@@ -193,13 +187,10 @@ so um the deploy script is at slash opt slash caret slash deploy dot sh
   <h2>The glossary</h2>
   <p>
     Speech-to-text mangles product names. The spec ships a small default
-    glossary of public Caret vocabulary — the contract, the agents a backend
-    can front, and the nouns people say while setting one up:
-  </p>
-  <pre><code>Caret · caret/v2 · caret/v1 · GrokBot · Claude Code · Codex · Hermes
-OpenClaw · OpenWhisper · Tailscale · QR code · API key</code></pre>
-  <p>
-    Each entry carries its canonical spelling, the ways it tends to get
+    glossary of public Caret vocabulary in
+    <a href="/spec/cleanup/v1/glossary.json"><code>glossary.json</code></a>:
+    the product, the agents a backend can front, and the nouns people say
+    while setting one up. Each entry carries its canonical spelling, the ways it tends to get
     mis-heard, and a sentence of context. It biases spelling
     <strong>in context only</strong> and is never a find-and-replace: an
     entry applies when the surrounding words are clearly about that term, so
@@ -267,8 +258,6 @@ OpenClaw · OpenWhisper · Tailscale · QR code · API key</code></pre>
     <a href="/reference/">reference backends</a> consume this spec as
     data from <code>spec/cleanup/v1/</code> and compose the same digest;
     read <code>cleanup.go</code> or <code>cleanup.py</code> to see how.
-    The <a href="/hosted/">hosted Caret API</a> reports the digest it
-    runs in <code>cleanup.spec</code> on <code>/health</code>.
   </p>
 </main>
 </div>

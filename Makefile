@@ -20,10 +20,9 @@ help:
 	@echo "make spec   regenerate the derived cleanup-spec files in spec/cleanup/v1/"
 	@echo "make reference-test  just the V4 reference implementations (Go + Python)"
 
-# docs/ is the whole published tree. Retired pre-V4 paths (the old
-# /legacy/ pages, openapi.yaml, agent-prompts/, integrations/) exist in
-# docs/ only as redirect stubs and short retirement notices; the archived
-# material itself lives under legacy/ and is not published.
+# docs/ plus spec/cleanup/v1/ is the whole published tree: the current
+# caret/v4 pages and nothing else. Pre-V4 material under legacy/ is kept
+# for history only and never copied in; its old URLs 404.
 # scripts/docs_check.py mirrors this layout in EXTRA_SITE_FILES — change
 # both together.
 site:
