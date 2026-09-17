@@ -139,14 +139,17 @@ def resolve(link: str, page_rel: str) -> str | None:
     return target
 
 
-def check_links(html: str, page_rel: str, known: set[str]) -> list[str]:
+def check_links(
+    html: str, page_rel: str, known: set[str], label: str = "docs"
+) -> list[str]:
     findings = []
-    for link in HREF.findall(html):
+    links = HREF.findall(html) + MARKDOWN_LINK.findall(html)
+    for link in links:
         target = resolve(link, page_rel)
         if target is None:
             continue
         if target not in known and target + "/index.html" not in known:
-            findings.append(f"docs/{page_rel}: broken internal link {link!r}")
+            findings.append(f"{label}/{page_rel}: broken internal link {link!r}")
     return findings
 
 
@@ -211,6 +214,7 @@ def check_site(site_dir: Path) -> list[str]:
     if not site_dir.is_dir():
         return [f"{site_dir}: not a directory"]
     label = str(site_dir)
+    known = {str(path.relative_to(site_dir)) for path in site_dir.rglob("*") if path.is_file()}
     for path in sorted(site_dir.rglob("*")):
         if not path.is_file():
             continue
@@ -221,6 +225,7 @@ def check_site(site_dir: Path) -> list[str]:
         if not rel.endswith((".html", ".md")):
             continue
         text = path.read_text(encoding="utf-8")
+        findings.extend(check_links(text, rel, known, label=label))
         findings.extend(check_forbidden_text(text, rel, label=label))
         findings.extend(check_retired_references(text, rel, label=label))
     return findings
@@ -261,6 +266,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if rel in PUBLISHED_FILES:
             text = page.read_text(encoding="utf-8")
+            findings.extend(check_links(text, rel, known))
             findings.extend(check_forbidden_text(text, rel))
             findings.extend(check_retired_references(text, rel))
             continue
