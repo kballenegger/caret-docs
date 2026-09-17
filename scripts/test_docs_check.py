@@ -150,6 +150,43 @@ class HostedPageTests(unittest.TestCase):
         self.assertIn("524 288 bytes", html)
 
 
+class NavigationAssetTests(unittest.TestCase):
+    css = (docs_check.DOCS / "styles.css").read_text(encoding="utf-8")
+    js = (docs_check.DOCS / "nav.js").read_text(encoding="utf-8")
+    overview = (docs_check.DOCS / "index.html").read_text(encoding="utf-8")
+
+    def test_mobile_menu_has_a_script_free_fallback_and_no_horizontal_overflow(self):
+        self.assertIn("@media (max-width: 52rem)", self.css)
+        self.assertIn(".js .sidebar { display: none; }", self.css)
+        self.assertIn(".js .nav-open .sidebar { display: block; }", self.css)
+        self.assertIn("table { display: block; overflow-x: auto; }", self.css)
+        self.assertIn("minmax(0, 1fr)", self.css)
+
+    def test_menu_script_covers_keyboard_and_focus_behavior(self):
+        self.assertIn('aria-controls="site-nav"', self.overview)
+        self.assertIn('aria-expanded', self.js)
+        self.assertIn('event.key === "Escape"', self.js)
+        self.assertIn("first.focus()", self.js)
+        self.assertIn("button.focus()", self.js)
+        self.assertIn('root.classList.add("js")', self.js)
+
+
+class HostedCompatibilityTests(unittest.TestCase):
+    page = docs_check.DOCS / "hosted/index.html"
+
+    def test_hosted_dictionary_keeps_its_supported_v2_route(self):
+        html = self.page.read_text(encoding="utf-8")
+        self.assertIn("</span> /v2/dictionary", html)
+        self.assertIn("This is the one path that kept its <code>/v2/</code> prefix", html)
+        self.assertNotIn("/v2/dictate", html)
+
+    def test_hosted_and_open_protocol_use_distinct_discriminators(self):
+        html = self.page.read_text(encoding="utf-8")
+        self.assertIn('"contract": "caret/v4"', html)
+        self.assertIn('"protocol": "caret/v4"', html)
+        self.assertIn("The keys differ on purpose", html)
+
+
 class RepoTests(unittest.TestCase):
     def test_the_docs_tree_passes(self):
         self.assertEqual(docs_check.main([]), 0)
@@ -162,6 +199,17 @@ class RepoTests(unittest.TestCase):
                 self.assertIn(docs_check.STUB_MARKER, text, rel)
             else:
                 self.assertNotIn("ARCHIVED —", text, rel)
+
+    def test_every_retired_html_route_redirects_to_the_notice(self):
+        retired_html = [
+            page for page in docs_check.DOCS.rglob("*.html")
+            if docs_check.is_retired(str(page.relative_to(docs_check.DOCS)))
+        ]
+        self.assertGreaterEqual(len(retired_html), 18)
+        for page in retired_html:
+            rel = str(page.relative_to(docs_check.DOCS))
+            text = page.read_text(encoding="utf-8")
+            self.assertEqual(docs_check.check_retired_file(text, rel), [], rel)
 
     def test_retired_prompt_and_schema_paths_are_notices(self):
         for rel in ("openapi.yaml", "legacy/openapi.yaml",
