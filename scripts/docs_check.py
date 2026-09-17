@@ -88,6 +88,7 @@ FORBIDDEN_TEXT = (
 MAIN_SITE = "https://typewithcaret.com"
 
 HREF = re.compile(r"""(?:href|src)\s*=\s*["']([^"'#]+)(?:#[^"']*)?["']""")
+MARKDOWN_LINK = re.compile(r"\]\(([^)#\s]+)(?:#[^)]*)?\)")
 SIDEBAR = re.compile(r'<aside class="sidebar" id="site-nav">.*?</aside>', re.S)
 HEADER = re.compile(r'<header class="site">.*?</header>', re.S)
 CURRENT = re.compile(r'<a href="([^"]+)" aria-current="page">')
@@ -151,7 +152,8 @@ def check_links(html: str, page_rel: str, known: set[str]) -> list[str]:
 
 def check_retired_references(html: str, page_rel: str, label: str = "docs") -> list[str]:
     findings = []
-    for link in HREF.findall(html):
+    links = HREF.findall(html) + MARKDOWN_LINK.findall(html)
+    for link in links:
         target = resolve(link, page_rel)
         if target is not None and is_retired(target):
             findings.append(f"{label}/{page_rel}: links to retired URL {link!r}")
@@ -216,7 +218,7 @@ def check_site(site_dir: Path) -> list[str]:
         if is_retired(rel):
             findings.append(f"{label}/{rel}: retired path is present in the assembled site")
             continue
-        if not rel.endswith(".html"):
+        if not rel.endswith((".html", ".md")):
             continue
         text = path.read_text(encoding="utf-8")
         findings.extend(check_forbidden_text(text, rel, label=label))
@@ -260,6 +262,7 @@ def main(argv: list[str] | None = None) -> int:
         if rel in PUBLISHED_FILES:
             text = page.read_text(encoding="utf-8")
             findings.extend(check_forbidden_text(text, rel))
+            findings.extend(check_retired_references(text, rel))
             continue
         if not rel.endswith(".html"):
             findings.append(f"docs/{rel}: unexpected file outside the published set")
