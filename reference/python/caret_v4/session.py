@@ -44,10 +44,11 @@ from .protocol import (
     normalize_vocabulary,
     retryable_for,
 )
-from .ws import CloseError, WSError
+from .ws import CLOSE_DRAIN_SECONDS, CloseError, WSError
 
 #: How long a client has to send its start frame, and how long a gap
-#: between frames is tolerated before the operation times out.
+#: between frames is tolerated before the operation times out. The
+#: server carries the live values; these are the protocol's defaults.
 START_DEADLINE_SECONDS = 10.0
 FRAME_GAP_SECONDS = 60.0
 #: §4 requires a progress event or a ping at least every 20 seconds.
@@ -66,6 +67,7 @@ class Session:
         self.conn = conn
         self.route = route
         self.authorization = authorization
+        self.credential = b""
         self.op_id = new_id("op")
         self.request_id = ""
         self.started_at = time.monotonic()
@@ -80,8 +82,13 @@ class Session:
         self.stream = None
         self.partial_seq = 0
 
+        # Every event goes out under one lock, and `terminated` is only
+        # read or written while holding it. That is what makes "exactly
+        # one terminal event" true when a partial, a progress tick, a
+        # cancel, and the result are all racing for the socket.
         self.terminated = False
         self._send_lock = threading.Lock()
+        self._watcher: threading.Thread | None = None
 
     # -------------------------------------------------------------- run
 
@@ -91,12 +98,14 @@ class Session:
         except (CloseError, WSError, OSError):
             # The peer vanished before the terminal event. §8: the server
             # discards the operation and the client replays it.
-            self.terminated = True
-        except Exception:  # pragma: no cover — a bug, not a protocol path
+            with self._send_lock:
+                self.terminated = True
+        except Exception:  # pragma: no cover, a bug, not a protocol path
             self.server.log.exception("op=%s route=%s unhandled error", self.op_id, self.route)
             self._fail(OpError("internal_error", "the backend failed unexpectedly"))
         finally:
             self._abort_stream()
+            self._join_watcher()
             try:
                 self.conn.close(1000, "")
             except OSError:
@@ -106,6 +115,7 @@ class Session:
         if not self.server.credential_valid(self.authorization):
             self._fail(OpError(ERR_UNAUTHORIZED, "missing or invalid credential"))
             return
+        self.credential = self.server.credential_digest(self.authorization)
         if not self.server.route_enabled(self.route):
             self._fail(OpError(ERR_NOT_SUPPORTED, f"this backend does not serve /{self.route}"))
             return
@@ -117,17 +127,23 @@ class Session:
 
         # §8 idempotency: a replayed client_request_id gets ready and then
         # the cached result immediately, so a retry after a dropped
-        # connection is not a second bill.
-        cached = self.server.cache_get(self.route, self.start_frame["client_request_id"])
+        # connection is not a second bill. The entry is purged as it is
+        # served (§10), so the replay after this one does the work again.
+        cached = self.server.cache_take(
+            self.credential, self.route, self.start_frame["client_request_id"]
+        )
         if cached is not None:
             self._send_ready()
             self.request_id = cached["request_id"]
-            self._send_result(cached["result"], cached["audio"])
+            self._send_result(cached["result"], cached["audio"], cache=False)
             return
 
-        self._send_ready()
+        # The recognizer is opened before ready so that ready.stt is true
+        # at the moment it is sent: "streaming" only when a live stream
+        # actually exists.
         if not self.text_input:
             self._open_stream()
+        self._send_ready()
 
         try:
             final = self._read_input()
@@ -149,11 +165,13 @@ class Session:
     # ------------------------------------------------------------ start
 
     def _read_start(self) -> None:
-        self.conn.set_timeout(START_DEADLINE_SECONDS)
+        self.conn.set_timeout(self.server.start_deadline)
         try:
             binary, data = self.conn.read_message()
         except socket.timeout:
-            raise OpError(ERR_TIMEOUT, "no start frame within 10 seconds") from None
+            raise OpError(
+                ERR_TIMEOUT, f"no start frame within {self.server.start_deadline:g} seconds"
+            ) from None
         if binary:
             raise OpError(ERR_PROTOCOL_ERROR, "audio arrived before start")
         frame = _parse_control(data)
@@ -196,9 +214,12 @@ class Session:
         self.start_frame = frame
 
     def _send_ready(self) -> None:
+        # "streaming" is a promise of partials, so it is only made when a
+        # live recognizer is open right now. Audio with no stream, which
+        # includes a cached replay, is "buffered".
         stt = None
         if not self.text_input:
-            stt = "streaming" if getattr(self.server.stt, "streaming", False) else "buffered"
+            stt = "streaming" if self.stream is not None else "buffered"
         self._send({"event": "ready", "protocol": PROTOCOL_VERSION, "op_id": self.op_id, "stt": stt})
 
     def _stt_options(self) -> lanes.STTOptions:
@@ -223,17 +244,20 @@ class Session:
             self.stream = None
 
     def _emit_partial(self, text: str) -> None:
-        if self.terminated or not text:
+        if not text:
             return
-        self.partial_seq += 1
-        self._send({
-            "event": "partial",
-            "op_id": self.op_id,
-            "seq": self.partial_seq,
-            "frames": self.frames,
-            "bytes": len(self.audio),
-            "text": text,
-        })
+        with self._send_lock:
+            if self.terminated:
+                return
+            self.partial_seq += 1
+            self._send_locked({
+                "event": "partial",
+                "op_id": self.op_id,
+                "seq": self.partial_seq,
+                "frames": self.frames,
+                "bytes": len(self.audio),
+                "text": text,
+            })
 
     # ------------------------------------------------------------ input
 
@@ -241,13 +265,16 @@ class Session:
         """Run until finalize (returned), cancel or a dead socket (None),
         or a terminal error (raised)."""
         while True:
-            self.conn.set_timeout(FRAME_GAP_SECONDS)
+            self.conn.set_timeout(self.server.frame_gap)
             try:
                 binary, data = self.conn.read_message()
             except socket.timeout:
-                raise OpError(ERR_TIMEOUT, "no audio for 60 seconds") from None
+                raise OpError(
+                    ERR_TIMEOUT, f"no audio for {self.server.frame_gap:g} seconds"
+                ) from None
             except (CloseError, WSError, OSError):
-                self.terminated = True
+                with self._send_lock:
+                    self.terminated = True
                 return None
             if binary:
                 self._consume_audio(data)
@@ -257,7 +284,8 @@ class Session:
             if kind == "finalize":
                 return frame
             if kind == "cancel":
-                self.terminated = True
+                with self._send_lock:
+                    self.terminated = True
                 return None
             if kind == "start":
                 raise OpError(ERR_PROTOCOL_ERROR, "start arrived twice")
@@ -318,6 +346,11 @@ class Session:
     # ------------------------------------------------------- finalizers
 
     def _finish(self, frame: dict) -> None:
+        # While a lane works, one thread keeps reading the socket so a
+        # cancel (§4: valid until the terminal event) or a dead peer is
+        # noticed, and another keeps the connection alive with progress.
+        # Both are stopped, in that order, before the terminal event.
+        self._watch_while_finishing()
         stop = self._start_progress()
         try:
             if self.route == ROUTE_DICTATE:
@@ -326,7 +359,7 @@ class Session:
                 result = self._finish_ask(frame)
             elif self.route == ROUTE_IMAGINE:
                 result = self._finish_imagine(frame)
-            else:  # pragma: no cover — the mux only routes the three
+            else:  # pragma: no cover, the mux only routes the three
                 raise OpError(ERR_NOT_SUPPORTED, "unknown route")
         except OpError as exc:
             stop()
@@ -334,30 +367,95 @@ class Session:
             return
         finally:
             stop()
-        self.request_id = new_id("req")
-        self.server.cache_put(
-            self.route, self.start_frame["client_request_id"],
-            self.request_id, result, self._consumed_audio(),
-        )
-        self._send_result(result, self._consumed_audio())
+        self._send_result(result, self._consumed_audio(), cache=True)
+
+    def _watch_while_finishing(self) -> None:
+        """Read the socket until the operation ends, in a thread.
+
+        A `cancel` here wins over the result: the operation is marked
+        terminated under the send lock, the socket closes 1000, and the
+        lane's answer is thrown away when it arrives. Any other frame is
+        dropped. A read error is a transport failure: no terminal event,
+        nothing cached, the client replays.
+        """
+        def watch() -> None:
+            self.conn.set_timeout(None)
+            while True:
+                try:
+                    binary, data = self.conn.read_message()
+                except CloseError:
+                    self._lost_peer()
+                    return
+                except (WSError, OSError):
+                    self._lost_peer()
+                    return
+                if binary:
+                    continue
+                try:
+                    frame = _parse_control(data)
+                except OpError:
+                    continue
+                if frame.get("type") == "cancel":
+                    with self._send_lock:
+                        if self.terminated:
+                            continue
+                        self.terminated = True
+                        self.server.log.info("op=%s route=%s cancelled while finishing",
+                                             self.op_id, self.route)
+                    # This thread owns the read side, so it drains and
+                    # closes the socket itself.
+                    self.conn.close(1000, "")
+                    return
+
+        self._watcher = threading.Thread(target=watch, name=f"watch-{self.op_id}", daemon=True)
+        self._watcher.start()
+
+    def _lost_peer(self) -> None:
+        """The watcher's read ended. After a terminal event that is the
+        peer's close reply and the connection is done; before one it is
+        a transport failure and the operation is discarded."""
+        with self._send_lock:
+            self.terminated = True
+        self.conn.close(1000, "")
+
+    def _join_watcher(self) -> None:
+        watcher, self._watcher = self._watcher, None
+        if watcher is None:
+            return
+        watcher.join(timeout=CLOSE_DRAIN_SECONDS)
+        if watcher.is_alive():
+            # The peer never answered the close frame. Cut the socket so
+            # the watcher's read returns and the thread exits.
+            self.conn.shutdown()
+            watcher.join(timeout=CLOSE_DRAIN_SECONDS)
 
     def _start_progress(self):
-        """Keep the socket honest while a lane works."""
+        """Keep the socket honest while a lane works. The returned stop
+        function joins the ticker, so once it returns no progress event
+        can be in flight."""
         done = threading.Event()
         began = time.monotonic()
 
         def tick():
-            while not done.wait(PROGRESS_EVERY_SECONDS):
-                self._send({
-                    "event": "progress",
-                    "op_id": self.op_id,
-                    "stage": self._stage(),
-                    "elapsed_ms": int((time.monotonic() - began) * 1000),
-                })
+            while not done.wait(self.server.progress_interval):
+                with self._send_lock:
+                    if self.terminated:
+                        return
+                    self._send_locked({
+                        "event": "progress",
+                        "op_id": self.op_id,
+                        "stage": self._stage(),
+                        "elapsed_ms": int((time.monotonic() - began) * 1000),
+                    })
 
         thread = threading.Thread(target=tick, name=f"progress-{self.op_id}", daemon=True)
         thread.start()
-        return done.set
+
+        def stop() -> None:
+            done.set()
+            thread.join()
+
+        return stop
 
     def _stage(self) -> str:
         return {ROUTE_IMAGINE: "generating", ROUTE_ASK: "answering"}.get(self.route, "transcribing")
@@ -410,7 +508,10 @@ class Session:
             raise OpError(ERR_GENERATION_FAILED, "the agent could not answer") from None
         if not text or not text.strip():
             raise OpError(ERR_GENERATION_FAILED, "the agent could not answer")
-        return {"type": "message", "text": text, "transcript": transcript}
+        result = {"type": "message", "text": text}
+        if transcript is not None:
+            result["transcript"] = transcript
+        return result
 
     def _finish_imagine(self, frame: dict) -> dict:
         aspect = str(frame.get("aspect_ratio") or "1:1")
@@ -427,21 +528,24 @@ class Session:
             raise OpError(ERR_GENERATION_FAILED, "the image could not be generated") from None
         if not data:
             raise OpError(ERR_GENERATION_FAILED, "the image could not be generated")
-        return {
+        result = {
             "type": "image",
             "mime_type": mime,
             "byte_length": len(data),
             "sha256": hashlib.sha256(data).hexdigest(),
             "data_base64": base64.b64encode(data).decode("ascii"),
-            "transcript": transcript,
-            "provider": getattr(self.server.image, "name", "unknown"),
         }
+        if transcript is not None:
+            result["transcript"] = transcript
+        result["provider"] = getattr(self.server.image, "name", "unknown")
+        return result
 
-    def _prompt_text(self) -> tuple[str, str]:
+    def _prompt_text(self) -> tuple[str, str | None]:
         """The instruction the route works from, plus the transcript to
-        echo back when the input was speech."""
+        echo back when the input was speech. §6 marks transcript "audio
+        input only", so for text input it is None and left out."""
         if self.text_input:
-            return self.input_text, ""
+            return self.input_text, None
         text, _ = self._transcript()
         return text, text
 
@@ -456,7 +560,10 @@ class Session:
         if self.text_input:
             return self.input_text, ""
         if self.server.stt is None:
-            raise OpError(ERR_NOT_SUPPORTED, "this backend has no speech recognizer")
+            # §9: not_supported is for an unserved route or refused text
+            # input. Speech that no route can transcribe is
+            # transcription_failed, and retryable.
+            raise OpError(ERR_TRANSCRIPTION_FAILED, "speech recognition is unavailable")
         route = "fallback"
         text = ""
         if self.stream is not None:
@@ -487,54 +594,78 @@ class Session:
 
     # -------------------------------------------------------- terminals
 
+    def _send_locked(self, event: dict) -> None:
+        """Write one event. The caller holds the send lock."""
+        try:
+            self.conn.send_text(json.dumps(event, ensure_ascii=False))
+        except (OSError, WSError):
+            self.terminated = True
+
     def _send(self, event: dict) -> None:
         with self._send_lock:
-            try:
-                self.conn.send_text(json.dumps(event, ensure_ascii=False))
-            except (OSError, WSError):
-                self.terminated = True
+            self._send_locked(event)
 
-    def _send_result(self, result: dict, audio: dict | None) -> None:
-        if self.terminated:
-            return
-        self.terminated = True
-        self.request_id = self.request_id or new_id("req")
-        event = {
-            "event": "result",
-            "op_id": self.op_id,
-            "request_id": self.request_id,
-            "result": result,
-        }
-        if audio is not None:
-            event["audio"] = audio
-        self._send(event)
-        self.server.log.info(
-            "op=%s route=%s ok in %dms",
-            self.op_id, self.route, int((time.monotonic() - self.started_at) * 1000),
-        )
-        self.conn.close(1000, "")
+    def _close(self, code: int, reason: str = "") -> None:
+        """Write the close frame. While a watcher owns the read side it
+        finishes the close (drain, socket); otherwise do it all here."""
+        if self._watcher is not None:
+            self.conn.send_close(code, reason)
+        else:
+            self.conn.close(code, reason)
+
+    def _send_result(self, result: dict, audio: dict | None, cache: bool) -> None:
+        """The one terminal result. Caching happens under the same lock
+        as the send, so a cancel that wins the race leaves nothing
+        behind for a replay to find."""
+        with self._send_lock:
+            if self.terminated:
+                return
+            self.terminated = True
+            self.request_id = self.request_id or new_id("req")
+            if cache:
+                self.server.cache_put(
+                    self.credential, self.route, self.start_frame["client_request_id"],
+                    self.request_id, result, audio,
+                )
+            event = {
+                "event": "result",
+                "op_id": self.op_id,
+                "request_id": self.request_id,
+                "result": result,
+            }
+            if audio is not None:
+                event["audio"] = audio
+            self._send_locked(event)
+            self.server.log.info(
+                "op=%s route=%s ok in %dms",
+                self.op_id, self.route, int((time.monotonic() - self.started_at) * 1000),
+            )
+            self._close(1000, "")
 
     def _fail(self, error: OpError | None) -> None:
         """The one terminal error event, with §10's close code. Logging is
         ids, counts, and error codes: never a transcript, never audio,
         never a vocabulary."""
-        if error is None or self.terminated:
+        if error is None:
             return
-        self.terminated = True
-        self.request_id = self.request_id or new_id("req")
-        self._send({
-            "event": "error",
-            "op_id": self.op_id,
-            "request_id": self.request_id,
-            "code": error.code,
-            "message": error.message,
-            "retryable": retryable_for(error.code),
-        })
-        self.server.log.info(
-            "op=%s route=%s error=%s in %dms",
-            self.op_id, self.route, error.code, int((time.monotonic() - self.started_at) * 1000),
-        )
-        self.conn.close(close_code_for(error.code), error.code)
+        with self._send_lock:
+            if self.terminated:
+                return
+            self.terminated = True
+            self.request_id = self.request_id or new_id("req")
+            self._send_locked({
+                "event": "error",
+                "op_id": self.op_id,
+                "request_id": self.request_id,
+                "code": error.code,
+                "message": error.message,
+                "retryable": retryable_for(error.code),
+            })
+            self.server.log.info(
+                "op=%s route=%s error=%s in %dms",
+                self.op_id, self.route, error.code, int((time.monotonic() - self.started_at) * 1000),
+            )
+            self._close(close_code_for(error.code), error.code)
 
 
 def _parse_control(data: bytes) -> dict:

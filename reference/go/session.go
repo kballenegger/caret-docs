@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,61 +23,80 @@ import (
 // function. If a rule lives here, it applies to /dictate, /ask, and
 // /imagine identically, because there is nowhere else for it to live.
 
+// errPeerGone means the socket died before there was anything to answer.
+// §4 allows a close without a terminal event on transport failure, and
+// there is nobody left to tell anyway.
+var errPeerGone = errors.New("caretv4: peer closed the connection")
+
 type session struct {
-	server    *Server
-	conn      *Conn
-	route     string
-	opID      string
-	requestID string
-	startedAt time.Time
+	server     *Server
+	conn       *Conn
+	route      string
+	opID       string
+	requestID  string
+	credential string // sha256 hex of the presented credential, never the credential
+	startedAt  time.Time
 
 	start      *StartFrame
 	textInput  bool
 	inputText  string
 	vocabulary []string
 
+	// mu serializes every write to the socket with the flags that decide
+	// whether a write is still allowed. A partial, a progress tick, the
+	// terminal event, and the cancel path all take it, so exactly one of
+	// the terminal event and the cancel close wins and nothing lands
+	// after either. The audio counters live under it too, because a
+	// partial reports them.
+	mu         sync.Mutex
 	audio      []byte
 	frames     int
-	stream     STTStream
 	partialSeq int
-
 	terminated bool
+
+	stream STTStream
 }
 
 func (s *session) run(r *http.Request) {
 	defer func() { _ = s.conn.Close(1000, "") }()
 
-	if _, valid := s.server.checkAuth(r.Header.Get("Authorization")); !valid {
+	_, valid, digest := s.server.checkAuth(r.Header.Get("Authorization"))
+	if !valid {
 		s.fail(opErr(ErrUnauthorized, "missing or invalid credential"))
 		return
 	}
+	s.credential = digest
 	if !s.server.routeEnabled(s.route) {
 		s.fail(opErr(ErrNotSupported, "this backend does not serve /"+s.route))
 		return
 	}
 	if err := s.readStart(); err != nil {
-		s.fail(err)
+		var oe *OpError
+		if errors.As(err, &oe) {
+			s.fail(oe)
+		} else {
+			s.end() // the peer went away; nothing to answer
+		}
 		return
 	}
 
 	// §8 idempotency: a replayed client_request_id gets ready and then
 	// the cached result immediately, so a retry after a dropped
-	// connection is not a second bill.
-	if entry, ok := s.server.cache.get(s.route, s.start.ClientRequestID); ok {
+	// connection is not a second bill. §10: delivery purges the entry.
+	if entry, ok := s.server.cache.take(s.credential, s.route, s.start.ClientRequestID); ok {
 		s.sendReady()
 		s.requestID = entry.requestID
 		s.sendResult(entry.result, entry.audio)
 		return
 	}
 
+	// The recognizer is opened before ready so that ready.stt describes
+	// what is true at the moment it is sent.
+	if !s.textInput {
+		s.openStream()
+	}
 	s.sendReady()
 
-	if !s.textInput {
-		if err := s.openStream(); err != nil {
-			s.fail(err)
-			return
-		}
-	}
 	final, err := s.readInput()
 	if err != nil {
 		s.abortStream()
@@ -84,7 +104,7 @@ func (s *session) run(r *http.Request) {
 		return
 	}
 	if final == nil {
-		s.abortStream() // cancelled: no terminal event, close 1000
+		s.abortStream() // cancelled or gone: no terminal event
 		return
 	}
 	if err := s.checkFinalize(final); err != nil {
@@ -97,14 +117,16 @@ func (s *session) run(r *http.Request) {
 
 // ------------------------------------------------------------------ start
 
-func (s *session) readStart() *OpError {
-	_ = s.conn.SetReadDeadline(time.Now().Add(startDeadline))
+// readStart returns an *OpError the client should hear about, or
+// errPeerGone when there is no client left.
+func (s *session) readStart() error {
+	_ = s.conn.SetReadDeadline(time.Now().Add(s.server.cfg.StartDeadline))
 	msg, err := s.conn.ReadMessage()
 	if err != nil {
 		if errors.Is(err, os.ErrDeadlineExceeded) {
 			return opErr(ErrTimeout, "no start frame within 10 seconds")
 		}
-		return nil // the peer went away; nothing to answer
+		return errPeerGone
 	}
 	if msg.Binary {
 		return opErr(ErrProtocolError, "audio arrived before start")
@@ -169,10 +191,13 @@ func (s *session) readStart() *OpError {
 	return nil
 }
 
+// sendReady reports what is true right now: "streaming" only when a live
+// recognizer is actually open, "buffered" for any other audio input
+// (including a replay served from cache), null for text.
 func (s *session) sendReady() {
 	stt := any(nil)
 	if !s.textInput {
-		if s.server.stt != nil && s.server.stt.Streaming() {
+		if s.stream != nil {
 			stt = "streaming"
 		} else {
 			stt = "buffered"
@@ -189,20 +214,18 @@ func (s *session) sendReady() {
 // openStream asks the speech lane for a live recognizer. A provider
 // without one is not a failure: §8 says the operation lives on, audio is
 // buffered, and the transcript is produced at finalize.
-func (s *session) openStream() *OpError {
+func (s *session) openStream() {
 	if s.server.stt == nil {
-		return nil
+		return
 	}
 	stream, err := s.server.stt.Open(context.Background(), s.sttOptions(), s.emitPartial)
 	if err != nil {
-		if errors.Is(err, ErrNoStreaming) {
-			return nil
+		if !errors.Is(err, ErrNoStreaming) {
+			s.server.log.Printf("op=%s route=%s streaming recognizer unavailable", s.opID, s.route)
 		}
-		s.server.log.Printf("op=%s route=%s streaming recognizer unavailable", s.opID, s.route)
-		return nil
+		return
 	}
 	s.stream = stream
-	return nil
 }
 
 func (s *session) sttOptions() STTOptions {
@@ -214,11 +237,16 @@ func (s *session) sttOptions() STTOptions {
 }
 
 func (s *session) emitPartial(text string) {
-	if s.terminated || text == "" {
+	if text == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.terminated {
 		return
 	}
 	s.partialSeq++
-	s.send(map[string]any{
+	s.sendLocked(map[string]any{
 		"event":  "partial",
 		"op_id":  s.opID,
 		"seq":    s.partialSeq,
@@ -230,11 +258,11 @@ func (s *session) emitPartial(text string) {
 
 // ------------------------------------------------------------------ input
 
-// readInput runs until finalize (returned), cancel (nil, nil), or a
-// terminal error.
+// readInput runs until finalize (returned), cancel or transport failure
+// (nil, nil), or a terminal error.
 func (s *session) readInput() (*FinalizeFrame, *OpError) {
 	for {
-		_ = s.conn.SetReadDeadline(time.Now().Add(frameGap))
+		_ = s.conn.SetReadDeadline(time.Now().Add(s.server.cfg.FrameGap))
 		msg, err := s.conn.ReadMessage()
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
@@ -242,7 +270,7 @@ func (s *session) readInput() (*FinalizeFrame, *OpError) {
 			}
 			// The socket died before the terminal event. §8: the server
 			// discards the operation; the client replays it.
-			s.terminated = true
+			s.end()
 			return nil, nil
 		}
 		if msg.Binary {
@@ -263,7 +291,7 @@ func (s *session) readInput() (*FinalizeFrame, *OpError) {
 			}
 			return &frame, nil
 		case "cancel":
-			s.terminated = true
+			s.cancel()
 			return nil, nil
 		case "start":
 			return nil, opErr(ErrProtocolError, "start arrived twice")
@@ -283,11 +311,14 @@ func (s *session) consumeAudio(chunk []byte) *OpError {
 	if len(chunk) == 0 {
 		return nil // empty frames are ignored, not errors
 	}
+	s.mu.Lock()
 	if len(s.audio)+len(chunk) > s.server.cfg.MaxAudioSeconds*bytesPerSecond {
+		s.mu.Unlock()
 		return opErr(ErrAudioTooLong, "audio exceeded the advertised max_audio_seconds")
 	}
 	s.frames++
 	s.audio = append(s.audio, chunk...)
+	s.mu.Unlock()
 	if s.stream != nil {
 		if err := s.stream.Write(chunk); err != nil {
 			// §8: streaming failure is not operation failure. Partials
@@ -337,9 +368,15 @@ func (s *session) consumedAudio() *AudioSpec {
 
 // ------------------------------------------------------------- finalizers
 
+// finish runs the route's work with two companions: a progress ticker
+// that keeps the socket honest, and a reader that watches for cancel.
+// §4 says cancel is valid at any point before the terminal event, and
+// after finalize nothing else would be reading the socket.
 func (s *session) finish(frame *FinalizeFrame) {
+	_ = s.conn.SetReadDeadline(time.Time{})
+	watching := make(chan struct{})
+	go s.watchForCancel(watching)
 	stop := s.startProgress()
-	defer stop()
 
 	var (
 		result any
@@ -358,21 +395,52 @@ func (s *session) finish(frame *FinalizeFrame) {
 	stop()
 	if oe != nil {
 		s.fail(oe)
-		return
+	} else {
+		s.requestID = newID("req")
+		// A result nobody received is not a success to replay: a cancel
+		// or a dead socket discards it, so only a delivered result is
+		// cached.
+		if s.sendResult(result, s.consumedAudio()) {
+			s.server.cache.put(s.credential, s.route, s.start.ClientRequestID, s.requestID, result, s.consumedAudio())
+		}
 	}
-	s.requestID = newID("req")
-	s.server.cache.put(s.route, s.start.ClientRequestID, s.requestID, result, s.consumedAudio())
-	s.sendResult(result, s.consumedAudio())
+	<-watching
+}
+
+// watchForCancel reads the socket while the provider works. A cancel
+// frame ends the operation with close 1000 and no terminal event; a read
+// error means the peer is gone and there is nothing to send. Any other
+// frame is dropped. It returns once the socket is closed by whichever
+// path won.
+func (s *session) watchForCancel(done chan<- struct{}) {
+	defer close(done)
+	for {
+		msg, err := s.conn.ReadMessage()
+		if err != nil {
+			s.end()
+			return
+		}
+		if msg.Binary {
+			continue
+		}
+		if kind, jerr := controlType(msg.Data); jerr == nil && kind == "cancel" {
+			s.cancel()
+			return
+		}
+	}
 }
 
 // startProgress keeps the socket honest while a lane works. §4 requires
 // a progress event or a ping at least every 20 seconds; this sends one
-// every 5.
+// every 5 by default. The returned function stops the ticker and waits
+// for it, so no progress event can land after the terminal event.
 func (s *session) startProgress() func() {
 	done := make(chan struct{})
-	stopped := false
+	finished := make(chan struct{})
+	var once sync.Once
 	go func() {
-		ticker := time.NewTicker(progressEvery)
+		defer close(finished)
+		ticker := time.NewTicker(s.server.cfg.ProgressInterval)
 		defer ticker.Stop()
 		began := time.Now()
 		for {
@@ -390,10 +458,8 @@ func (s *session) startProgress() func() {
 		}
 	}()
 	return func() {
-		if !stopped {
-			stopped = true
-			close(done)
-		}
+		once.Do(func() { close(done) })
+		<-finished
 	}
 }
 
@@ -526,14 +592,16 @@ func (s *session) promptText() (prompt, transcript string, oe *OpError) {
 
 // transcript resolves the audio to words: the live recognizer's flush
 // when there was one, the batch route otherwise. An empty transcript
-// from a healthy route is no_speech_detected — silence is an answer, not
+// from a healthy route is no_speech_detected: silence is an answer, not
 // an error, and never a reason to fall back.
 func (s *session) transcript() (string, string, *OpError) {
 	if s.textInput {
 		return s.inputText, "", nil
 	}
 	if s.server.stt == nil {
-		return "", "", opErr(ErrNotSupported, "this backend has no speech recognizer")
+		// The route is served, the input is audio, and there is nothing
+		// to transcribe it with: every transcription route has failed.
+		return "", "", opErr(ErrTranscriptionFailed, "speech recognition is unavailable")
 	}
 	route := "fallback"
 	var text string
@@ -571,17 +639,55 @@ func (s *session) abortStream() {
 
 // ------------------------------------------------------------- terminals
 
-func (s *session) send(event map[string]any) {
-	if err := s.conn.WriteText(eventJSON(event)); err != nil {
-		s.terminated = true
-	}
+// send writes one event unless the operation has already ended.
+func (s *session) send(event map[string]any) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sendLocked(event)
 }
 
-func (s *session) sendResult(result any, audio *AudioSpec) {
+func (s *session) sendLocked(event map[string]any) bool {
 	if s.terminated {
+		return false
+	}
+	if err := s.conn.WriteText(eventJSON(event)); err != nil {
+		s.terminated = true
+		return false
+	}
+	return true
+}
+
+// end marks the operation over without a terminal event, for a peer that
+// is no longer there.
+func (s *session) end() {
+	s.mu.Lock()
+	s.terminated = true
+	s.mu.Unlock()
+}
+
+// cancel is §4's abandon: discard everything, close 1000, no terminal
+// event. It loses to a terminal event that is already on the wire.
+func (s *session) cancel() {
+	s.mu.Lock()
+	if s.terminated {
+		s.mu.Unlock()
 		return
 	}
 	s.terminated = true
+	s.mu.Unlock()
+	s.server.log.Printf("op=%s route=%s cancelled in %dms", s.opID, s.route, time.Since(s.startedAt).Milliseconds())
+	_ = s.conn.Close(1000, "")
+}
+
+// sendResult writes the one result event and closes 1000. It reports
+// whether the event went out; a cancel or a dead socket means it did
+// not, and the result is dropped rather than cached.
+func (s *session) sendResult(result any, audio *AudioSpec) bool {
+	s.mu.Lock()
+	if s.terminated {
+		s.mu.Unlock()
+		return false
+	}
 	if s.requestID == "" {
 		s.requestID = newID("req")
 	}
@@ -594,22 +700,32 @@ func (s *session) sendResult(result any, audio *AudioSpec) {
 	if audio != nil {
 		event["audio"] = audio
 	}
-	s.send(event)
+	sent := s.sendLocked(event)
+	s.terminated = true
+	s.mu.Unlock()
+	if !sent {
+		return false
+	}
 	s.server.log.Printf("op=%s route=%s ok in %dms", s.opID, s.route, time.Since(s.startedAt).Milliseconds())
 	_ = s.conn.Close(1000, "")
+	return true
 }
 
 // fail sends the one terminal error event and closes with its mapped
 // code. A nil error means the peer vanished: there is nobody to tell.
 func (s *session) fail(oe *OpError) {
-	if oe == nil || s.terminated {
+	if oe == nil {
 		return
 	}
-	s.terminated = true
+	s.mu.Lock()
+	if s.terminated {
+		s.mu.Unlock()
+		return
+	}
 	if s.requestID == "" {
 		s.requestID = newID("req")
 	}
-	s.send(map[string]any{
+	sent := s.sendLocked(map[string]any{
 		"event":      "error",
 		"op_id":      s.opID,
 		"request_id": s.requestID,
@@ -617,6 +733,11 @@ func (s *session) fail(oe *OpError) {
 		"message":    oe.Message,
 		"retryable":  RetryableFor(oe.Code),
 	})
+	s.terminated = true
+	s.mu.Unlock()
+	if !sent {
+		return
+	}
 	s.server.log.Printf("op=%s route=%s error=%s in %dms", s.opID, s.route, oe.Code, time.Since(s.startedAt).Milliseconds())
 	_ = s.conn.Close(CloseCodeFor(oe.Code), oe.Code)
 }

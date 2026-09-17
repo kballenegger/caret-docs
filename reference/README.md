@@ -5,6 +5,12 @@ Two runnable backends and two conformance checkers for the
 Go, one in Python. Both are complete, both are dependency-free, and both
 speak the same wire.
 
+**Start here, not from the spec.** Clone, pick a language, run it, wire
+its lanes to the recognizer, model and image tool you already use, and
+you have a backend. Writing one from scratch against the protocol page
+is for runtimes these two cannot run on. A coding agent can do the whole
+job from https://docs.typewithcaret.com/agent/instructions.md.
+
 **Go is the recommended default.** It is the one to read first, the one
 to deploy, and the one the docs lead with. Python is the supported
 alternative for operators who would rather run Python, and it is the
@@ -94,6 +100,23 @@ path goes, or read `CARET_AUDIO_PATH`; the client's vocabulary arrives as
 reads its prompt on stdin and writes its answer on stdout, image bytes
 included.
 
+An `https://` lane POSTs one JSON object and reads one back. This is
+the reference's adapter contract, not part of the protocol:
+
+| Lane | Request body | Response body |
+| --- | --- | --- |
+| speech | `codec`, `sample_rate_hz`, `channels`, `audio_base64`, `vocabulary`, `language_hint` | `{"text": "..."}` |
+| agent | `prompt`, `visible_text`, `vocabulary` | `{"text": "..."}` |
+| image | `prompt`, `aspect_ratio`, `quality` | `{"mime_type": "image/png", "data_base64": "..."}` |
+| cleanup | `system`, `transcript`, `prompt` | `{"text": "..."}` |
+
+A provider that speaks a different shape gets a small local shim that
+translates, with the provider's key in the shim's environment and never
+in the lane string. `command:` and `https://` speech lanes are buffered:
+`partials.dictate` is advertised `false` and results say
+`stt_route: "fallback"`. Live partials need the streaming half of the
+speech interface in `lanes.go` or `lanes.py`.
+
 ```
 # a local Whisper-class recognizer and an agent CLI
 go run ./cmd/caret-v4-backend \
@@ -131,30 +154,51 @@ any language, any host, a production backend or a first attempt written
 this afternoon. It exercises what is easy to get subtly wrong.
 
 * `/health` shape, protocol name, honest capabilities, auth reporting
-* a bogus credential refused, with close code 4401
+* a missing credential and a bogus one both refused, with close code
+  4401 (or an HTTP 401 before the upgrade)
+* `ready` carries `protocol: 4`, an `op_id`, and an `stt` value of
+  `streaming`, `buffered` or `null`
 * the dictation happy path: result type, text, `raw_transcript`,
-  `stt_route`, `request_id`, close code 1000
+  `stt_route`, `request_id`, close code 1000, and an `audio` echo whose
+  frames and bytes equal what the checker sent
 * partials that are cumulative and never regress
 * exactly one terminal event, and nothing after it
 * finalize totals that disagree with what arrived, giving
   `audio_incomplete` with `retryable: true`
-* replay under a repeated `client_request_id`
+* replay under a repeated `client_request_id`: a fresh connection with
+  the same start gets the cached result without sending audio again;
+  a backend that does not cache gets a warning, not a failure, and
+  must still return the same text once the audio is resent
+* cancel before finalize, and cancel while the backend is still working
+  after finalize: close `1000`, no terminal event, never two terminal
+  events
+* `polish: false` returns the raw transcript with `polish_applied:
+  false`, and `polish: true` reports a boolean
+* text input on `/ask` and `/imagine` only when `text_input` advertises
+  it; a backend that says `false` is checked with audio instead
 * unknown JSON fields ignored, so future additive changes survive
 * buffered speech lanes advertise `partials: false` and return
   `stt_route: "fallback"` after finalize
-* cancellation closes with code `1000` and emits no terminal event
-* `polish: false` returns the raw transcript without claiming cleanup
-* the error table with its close codes: `protocol_error`,
-  `bad_request`, `audio_too_short`, `no_speech_detected`,
-  `not_supported`
+* the error table with its close codes and `retryable` flags:
+  `protocol_error` for a binary frame before `ready`, `bad_request` for
+  an oversized frame and a bad vocabulary, `audio_too_short`,
+  `no_speech_detected`, `not_supported` for an unserved route
 * `/imagine` results whose `byte_length` and `sha256` match the bytes
   actually delivered
+
+Some rules cannot be tested from outside without a slow or invasive
+run: the 10 second start timeout, the 60 second frame gap, the 600
+second audio ceiling, the 20 second keep-alive, constant-time credential
+comparison, buffering independent of the streaming recognizer, and
+vocabulary routing through a real recognizer. The checker prints one
+SKIP line for each so the report says what it did not check. Those
+rules are covered by the unit tests of each reference backend instead.
 
 Exit codes: 0 all required checks passed, 1 something failed, 2 the
 checker could not run. Warnings never fail a run: digital silence
 producing a word rather than `no_speech_detected` is a recognizer's
-business, not a protocol violation. Add `-json` (`--json`) for machine
-output.
+business, not a protocol violation, and a backend that skips the replay
+cache is warned, not failed. Add `-json` (`--json`) for machine output.
 
 Point it at any V4 backend, not just these:
 
@@ -198,9 +242,11 @@ code.
   for that configuration and the result reports
   `stt_route: "fallback"`. This is the protocol working, not a gap.
 * **In-memory state only.** The result cache and the audio buffer live
-  in the process. Two instances behind a load balancer will not
-  deduplicate each other's `client_request_id`, so pin a client to an
-  instance or put a shared cache behind the interface.
+  in the process. The cache is keyed by credential, route and
+  `client_request_id`, holds only delivered results, and drops an entry
+  the moment a replay collects it. Two instances behind a load balancer
+  will not deduplicate each other's `client_request_id`, so pin a
+  client to an instance or put a shared cache behind the interface.
 * **No rate limiting.** `rate_limited` is implemented in the error
   table, and nothing in these backends emits it. Enforce quota in front.
 * **Single process, no supervision.** No clustering, no graceful

@@ -25,7 +25,7 @@
     <div class="group"><span>Start</span>
       <ul>
         <li><a href="/">Overview</a></li>
-        <li><a href="/agent/">Agent instructions<small>build a backend with your coding agent</small></a></li>
+        <li><a href="/agent/">Agent instructions<small>set up the reference with your coding agent</small></a></li>
       </ul>
     </div>
     <div class="group"><span>caret/v4</span>
@@ -60,6 +60,14 @@
       implementations that both conform will interoperate without ever
       having met. Nothing in the contract requires Caret's own
       infrastructure, an account, or a relay.
+    </p>
+    <p style="margin:0.6rem 0 0">
+      You rarely need to implement this page. The
+      <a href="/reference/">reference backends</a> in Go and Python
+      already do, and wiring their lanes to your own tools is the usual
+      route to a backend; the <a href="/agent/">agent instructions</a>
+      walk a coding agent through it. This page is for maintainers, for
+      client authors, and for a runtime the reference cannot run on.
     </p>
   </div>
 

@@ -463,8 +463,13 @@ class HTTPCleanup:
 
 # --------------------------------------------------------------- resolving
 
+# A lane given as an object rather than a spec string is used as is.
+# That is how a test supplies a provider that sleeps, fails, or counts.
 
-def resolve_stt(spec: str, timeout: float = 120.0):
+
+def resolve_stt(spec, timeout: float = 120.0):
+    if spec is not None and not isinstance(spec, str):
+        return spec
     kind, argument = parse_lane(spec)
     return {
         LANE_OFF: lambda: None,
@@ -474,7 +479,9 @@ def resolve_stt(spec: str, timeout: float = 120.0):
     }[kind]()
 
 
-def resolve_agent(spec: str, timeout: float = 120.0):
+def resolve_agent(spec, timeout: float = 120.0):
+    if spec is not None and not isinstance(spec, str):
+        return spec
     kind, argument = parse_lane(spec)
     return {
         LANE_OFF: lambda: None,
@@ -484,7 +491,9 @@ def resolve_agent(spec: str, timeout: float = 120.0):
     }[kind]()
 
 
-def resolve_image(spec: str, timeout: float = 300.0):
+def resolve_image(spec, timeout: float = 300.0):
+    if spec is not None and not isinstance(spec, str):
+        return spec
     kind, argument = parse_lane(spec)
     return {
         LANE_OFF: lambda: None,
@@ -494,7 +503,9 @@ def resolve_image(spec: str, timeout: float = 300.0):
     }[kind]()
 
 
-def resolve_cleanup(spec: str, timeout: float = 120.0):
+def resolve_cleanup(spec, timeout: float = 120.0):
+    if spec is not None and not isinstance(spec, str):
+        return spec
     kind, argument = parse_lane(spec)
     return {
         LANE_OFF: lambda: None,

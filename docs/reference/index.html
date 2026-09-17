@@ -25,7 +25,7 @@
     <div class="group"><span>Start</span>
       <ul>
         <li><a href="/">Overview</a></li>
-        <li><a href="/agent/">Agent instructions<small>build a backend with your coding agent</small></a></li>
+        <li><a href="/agent/">Agent instructions<small>set up the reference with your coding agent</small></a></li>
       </ul>
     </div>
     <div class="group"><span>caret/v4</span>
@@ -53,14 +53,19 @@
   </p>
 
   <div class="note">
-    <strong>Go is the recommended default.</strong>
+    <strong>Start here, not from the spec.</strong>
     <p style="margin:0.4rem 0 0">
-      It is the one to read first and the one to deploy. Python is the
-      supported alternative for operators who would rather run Python;
+      Clone the repository, pick Go or Python, run it, and wire its
+      lanes to the recognizer, model and image tool you already use.
+      That is a backend. Go is the recommended default: the one to read
+      first and the one to deploy. Python is the supported alternative;
       it implements the same protocol, passes the same checks, and
       composes the same <code>caret-cleanup/1</code> digest. Neither
       imports the other, and neither imports anything that is not
-      shipped with its language.
+      shipped with its language. Writing your own backend against
+      <a href="/protocol/">the protocol page</a> is for runtimes these
+      two cannot run on. If you would rather hand the whole job to a
+      coding agent, give it <a href="/agent/">the agent instructions</a>.
     </p>
   </div>
 
@@ -110,6 +115,33 @@ python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure
     reports <code>status: not_ready</code> with a <code>no_stt</code>
     blocker, because <code>/dictate</code> is mandatory and pretending
     otherwise is the failure mode the protocol exists to prevent.
+  </p>
+  <p>
+    A <code>command:</code> speech lane receives a WAV file (<code>{audio}</code>
+    in the argv, or <code>CARET_AUDIO_PATH</code>), the client's vocabulary in
+    <code>CARET_VOCABULARY</code> and the language hint in
+    <code>CARET_LANGUAGE_HINT</code>; agent, image and cleanup commands read
+    the prompt on stdin and write the answer on stdout. An
+    <code>https://</code> lane POSTs one JSON object and reads one back:
+  </p>
+  <table>
+    <tr><th>Lane</th><th>Request body</th><th>Response body</th></tr>
+    <tr><td>speech</td><td><code>codec</code>, <code>sample_rate_hz</code>, <code>channels</code>, <code>audio_base64</code>, <code>vocabulary</code>, <code>language_hint</code></td><td><code>{"text": "…"}</code></td></tr>
+    <tr><td>agent</td><td><code>prompt</code>, <code>visible_text</code>, <code>vocabulary</code></td><td><code>{"text": "…"}</code></td></tr>
+    <tr><td>image</td><td><code>prompt</code>, <code>aspect_ratio</code>, <code>quality</code></td><td><code>{"mime_type": "image/png", "data_base64": "…"}</code></td></tr>
+    <tr><td>cleanup</td><td><code>system</code>, <code>transcript</code>, <code>prompt</code></td><td><code>{"text": "…"}</code></td></tr>
+  </table>
+  <p>
+    A provider that speaks a different shape gets a small local shim
+    that translates, with the provider's key in the shim's environment
+    and never in the lane string. The adapter contract belongs to the
+    reference, not the protocol; the protocol only sees what
+    <code>/health</code> advertises and what the routes return. A
+    <code>command:</code> or <code>https://</code> speech lane is
+    buffered, so <code>partials.dictate</code> is advertised
+    <code>false</code> and results say <code>stt_route: "fallback"</code>.
+    Live partials need the streaming half of the speech interface in
+    <code>lanes.go</code> or <code>lanes.py</code>.
   </p>
 
   <h2>Goals, in order</h2>
@@ -176,18 +208,26 @@ python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure
   <h2>The conformance checker</h2>
   <p>
     The checker treats the backend under test as a black box at a base
-    URL — any language, any host, a production backend or a first attempt
-    written this afternoon — and exercises what is easy to get subtly
-    wrong: audio-total verification and <code>audio_incomplete</code>,
-    exactly-one-terminal-event ordering after queued partials, cumulative
-    (never regressing) partial text, replay with a repeated
-    <code>client_request_id</code>, unknown JSON fields ignored, honest
-    capabilities versus served routes, <code>sha256</code> and
-    <code>byte_length</code> matching the image bytes actually delivered,
-    cancellation with a normal <code>1000</code> close and no terminal event,
-    buffered STT fallback reporting, and the error table with its close
-    codes. Exit 0 means a V4 client will be happy; 1 means something failed;
-    2 means the checker could not run. Warnings never fail a run.
+    URL, any language, any host, a production backend or a first attempt
+    written this afternoon. It exercises what is easy to get subtly
+    wrong: the shape of <code>ready</code>, a missing and a wrong
+    credential, audio-total verification and <code>audio_incomplete</code>,
+    the audio echo on the result, exactly-one-terminal-event ordering
+    after queued partials, cumulative (never regressing) partial text,
+    replay with a repeated <code>client_request_id</code> served from
+    cache, cancel before and after finalize with a normal <code>1000</code>
+    close and no terminal event, <code>polish: false</code> returning the
+    raw transcript, unknown JSON fields ignored, honest capabilities versus
+    served routes, text input only where <code>text_input</code> says so,
+    <code>sha256</code> and <code>byte_length</code> matching the image
+    bytes actually delivered, buffered STT fallback reporting, and the
+    error table with its close codes and <code>retryable</code> flags,
+    including an oversized frame and a binary frame before
+    <code>ready</code>. Rules it cannot test from outside, such as the
+    10 second start timeout, the 60 second frame gap and the keep-alive
+    cadence, are printed as SKIP lines so the report says what was not
+    checked. Exit 0 means a V4 client will be happy; 1 means something
+    failed; 2 means the checker could not run. Warnings never fail a run.
   </p>
   <pre><code>go run ./cmd/caret-v4-conform -url https://backend.example.com -key "$CARET_API_KEY"</code></pre>
   <p>

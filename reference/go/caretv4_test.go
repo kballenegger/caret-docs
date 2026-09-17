@@ -1,6 +1,7 @@
 package caretv4
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -624,4 +626,468 @@ func mustSpecDir(t *testing.T) string {
 		t.Skipf("cleanup spec not found: %v", err)
 	}
 	return dir
+}
+
+// ------------------------------------------------------------ fake lanes
+
+// fakeSTT is a recognizer the tests can shape: streaming or batch, an
+// Open that fails, a stream whose Write dies after the first frame, a
+// Transcribe that takes its time. Words come from the loopback rule so
+// transcripts stay comparable with what the loopback lane would say.
+type fakeSTT struct {
+	streaming  bool
+	openErr    error
+	writeFails bool
+	delay      time.Duration
+
+	transcribes atomic.Int32
+}
+
+func (f *fakeSTT) Name() string         { return "fake" }
+func (f *fakeSTT) Streaming() bool      { return f.streaming }
+func (f *fakeSTT) UsesVocabulary() bool { return true }
+
+func (f *fakeSTT) Open(_ context.Context, opts STTOptions, onPartial func(string)) (STTStream, error) {
+	if !f.streaming {
+		return nil, ErrNoStreaming
+	}
+	if f.openErr != nil {
+		return nil, f.openErr
+	}
+	return &fakeStream{lane: f, onPartial: onPartial, vocabulary: opts.Vocabulary}, nil
+}
+
+func (f *fakeSTT) Transcribe(_ context.Context, pcm []byte, opts STTOptions) (string, error) {
+	f.transcribes.Add(1)
+	time.Sleep(f.delay)
+	return loopbackWords(pcm, opts.Vocabulary), nil
+}
+
+type fakeStream struct {
+	lane       *fakeSTT
+	onPartial  func(string)
+	vocabulary []string
+	pcm        []byte
+	frames     int
+}
+
+func (s *fakeStream) Write(pcm []byte) error {
+	s.frames++
+	if s.lane.writeFails && s.frames > 1 {
+		return errors.New("stream died")
+	}
+	s.pcm = append(s.pcm, pcm...)
+	s.onPartial(loopbackWords(s.pcm, s.vocabulary))
+	return nil
+}
+
+func (s *fakeStream) Finish() (string, error) { return loopbackWords(s.pcm, s.vocabulary), nil }
+func (s *fakeStream) Abort()                  {}
+
+// fakeAgent answers after a pause, which is all the progress ticker and
+// the cancel watcher need from a provider.
+type fakeAgent struct{ delay time.Duration }
+
+func (fakeAgent) Name() string         { return "fake" }
+func (fakeAgent) UsesVocabulary() bool { return false }
+func (a fakeAgent) Respond(_ context.Context, prompt, _ string, _ []string) (string, error) {
+	time.Sleep(a.delay)
+	return "answer: " + prompt, nil
+}
+
+// failingCleanup is a polish lane that never manages to polish.
+type failingCleanup struct{}
+
+func (failingCleanup) Name() string { return "failing" }
+func (failingCleanup) Polish(context.Context, string, string) (string, error) {
+	return "", errors.New("cleanup is broken")
+}
+
+// audioOp is the plain audio /dictate operation most tests below start
+// from.
+func audioOp(id string, chunks [][]byte) operation {
+	return operation{
+		route:    RouteDictate,
+		start:    startFrame(id, nil),
+		audio:    chunks,
+		finalize: map[string]any{"type": "finalize", "audio": totals(chunks)},
+	}
+}
+
+// ---------------------------------------------------------- brief tests
+
+// T1: cancel while the provider is working ends with close 1000, no
+// terminal event, and nothing in the cache.
+func TestCancelDuringFinish(t *testing.T) {
+	server, backend := newTestServer(t, Config{})
+	lane := &fakeSTT{delay: 300 * time.Millisecond}
+	backend.stt = lane
+	checker := newChecker(server.URL)
+	chunks := chunkAudio(tone(1000), 200)
+
+	op := audioOp("cancel-finish", chunks)
+	op.cancel = cancelAfterFinalize
+	p := checker.run(op)
+	if p.err != nil {
+		t.Fatalf("transport: %v", p.err)
+	}
+	if p.terminals != 0 || p.lateTerminal {
+		t.Fatalf("cancel after finalize produced a terminal event: %#v", p.terminal)
+	}
+	if p.close != 1000 {
+		t.Fatalf("close code %d, want 1000", p.close)
+	}
+
+	replay := audioOp("cancel-finish", chunks)
+	replay.hold = 300 * time.Millisecond
+	p = checker.run(replay)
+	if p.terminalKind() != "result" {
+		t.Fatalf("replay got %q %q", p.terminalKind(), p.errorCode())
+	}
+	if p.fromCache {
+		t.Error("the cancelled operation's result was cached")
+	}
+	if n := lane.transcribes.Load(); n != 2 {
+		t.Errorf("the recognizer ran %d times, want 2", n)
+	}
+}
+
+// T2: the replay cache is per credential.
+func TestCacheIsPerCredential(t *testing.T) {
+	server, _ := newTestServer(t, Config{APIKeys: []string{"key-alpha", "key-bravo"}})
+	checker := newChecker(server.URL)
+	chunks := chunkAudio(tone(2000), 200)
+
+	first := audioOp("shared-id", chunks)
+	first.key = "key-alpha"
+	first.start["vocabulary"] = []string{"Alpha"}
+	if p := checker.run(first); p.terminalKind() != "result" {
+		t.Fatalf("first got %q %q", p.terminalKind(), p.errorCode())
+	}
+
+	second := audioOp("shared-id", chunks)
+	second.key = "key-bravo"
+	second.start["vocabulary"] = []string{"Bravo"}
+	second.hold = 300 * time.Millisecond
+	p := checker.run(second)
+	if p.terminalKind() != "result" {
+		t.Fatalf("second got %q %q", p.terminalKind(), p.errorCode())
+	}
+	if p.fromCache {
+		t.Fatal("the second credential was served the first credential's cached result")
+	}
+	result, _ := p.terminal["result"].(map[string]any)
+	if raw, _ := result["raw_transcript"].(string); !strings.Contains(raw, "Bravo") {
+		t.Errorf("raw_transcript = %q, want the second credential's own vocabulary", raw)
+	}
+}
+
+// T3: a cached result is served once, then purged.
+func TestReplayPurgesOnDelivery(t *testing.T) {
+	server, _ := newTestServer(t, Config{})
+	checker := newChecker(server.URL)
+	chunks := chunkAudio(tone(1500), 200)
+
+	first := checker.run(audioOp("purge", chunks))
+	if first.terminalKind() != "result" {
+		t.Fatalf("first got %q %q", first.terminalKind(), first.errorCode())
+	}
+	replay := audioOp("purge", chunks)
+	replay.hold = 300 * time.Millisecond
+	second := checker.run(replay)
+	if second.terminalKind() != "result" || !second.fromCache {
+		t.Fatalf("first replay was not served from the cache (%q, fromCache=%v)", second.terminalKind(), second.fromCache)
+	}
+	if second.terminal["request_id"] != first.terminal["request_id"] {
+		t.Errorf("cached replay carries request_id %v, want %v", second.terminal["request_id"], first.terminal["request_id"])
+	}
+	third := checker.run(replay)
+	if third.terminalKind() != "result" {
+		t.Fatalf("second replay got %q %q", third.terminalKind(), third.errorCode())
+	}
+	if third.fromCache {
+		t.Error("the cached result was served twice; §10 says purge on delivery")
+	}
+	if third.terminal["request_id"] == first.terminal["request_id"] {
+		t.Error("the second replay reused the original request_id, so it did not do the work again")
+	}
+}
+
+// T4: ready.stt says "buffered" when the streaming recognizer could not
+// be opened, and the operation still completes over the fallback.
+func TestReadySTTBufferedWhenOpenFails(t *testing.T) {
+	server, backend := newTestServer(t, Config{})
+	backend.stt = &fakeSTT{streaming: true, openErr: errors.New("no stream today")}
+	checker := newChecker(server.URL)
+	chunks := chunkAudio(tone(1500), 200)
+	p := checker.run(audioOp("open-fails", chunks))
+	if p.terminalKind() != "result" {
+		t.Fatalf("got %q %q", p.terminalKind(), p.errorCode())
+	}
+	if p.ready["stt"] != "buffered" {
+		t.Errorf("ready.stt = %v, want buffered", p.ready["stt"])
+	}
+	result, _ := p.terminal["result"].(map[string]any)
+	if result["stt_route"] != "fallback" {
+		t.Errorf("stt_route = %v, want fallback", result["stt_route"])
+	}
+}
+
+// T5: a peer that closes right after the upgrade is a transport failure,
+// not a panic and not an internal_error.
+func TestPeerCloseBeforeStartIsQuiet(t *testing.T) {
+	var logs strings.Builder
+	backend, err := New(Config{APIKeys: []string{testKey}, STT: "loopback", Logger: log.New(&logs, "", 0)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	handled := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backend.Handler().ServeHTTP(w, r)
+		close(handled)
+	}))
+	t.Cleanup(server.Close)
+
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+testKey)
+	conn, _, err := Dial(strings.Replace(server.URL, "http://", "ws://", 1)+"/dictate", DialOptions{Header: header, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	_ = conn.Close(1000, "")
+	select {
+	case <-handled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler did not return after the peer closed")
+	}
+	if out := logs.String(); strings.Contains(out, "panic") || strings.Contains(out, ErrInternalError) {
+		t.Errorf("a quiet peer close was logged as a failure:\n%s", out)
+	}
+}
+
+// T6: no credential is unauthorized, and so is every credential when
+// none is configured.
+func TestMissingCredentialAndNoKeys(t *testing.T) {
+	server, _ := newTestServer(t, Config{})
+	p := newChecker(server.URL).run(operation{route: RouteDictate, noAuth: true, start: startFrame("noauth", nil)})
+	if p.errorCode() != ErrUnauthorized || p.close != 4401 {
+		t.Errorf("no Authorization header: got %q %q close %d, want unauthorized 4401", p.terminalKind(), p.errorCode(), p.close)
+	}
+
+	keyless, _ := newTestServer(t, Config{APIKeys: []string{}})
+	p = newChecker(keyless.URL).run(operation{route: RouteDictate, start: startFrame("nokeys", nil)})
+	if p.errorCode() != ErrUnauthorized || p.close != 4401 {
+		t.Errorf("zero keys configured: got %q %q close %d, want unauthorized 4401", p.terminalKind(), p.errorCode(), p.close)
+	}
+}
+
+// T7: the §4 deadlines, shortened to something a test can wait for.
+func TestStartAndFrameGapTimeouts(t *testing.T) {
+	server, _ := newTestServer(t, Config{StartDeadline: 200 * time.Millisecond, FrameGap: 200 * time.Millisecond})
+	checker := newChecker(server.URL)
+
+	p := checker.run(operation{route: RouteDictate, skipStart: true})
+	if p.errorCode() != ErrTimeout || p.close != 4408 {
+		t.Errorf("no start: got %q %q close %d, want timeout 4408", p.terminalKind(), p.errorCode(), p.close)
+	}
+	if retry, _ := p.terminal["retryable"].(bool); !retry {
+		t.Error("timeout must be retryable")
+	}
+
+	p = checker.run(operation{route: RouteDictate, start: startFrame("gap", nil)})
+	if p.errorCode() != ErrTimeout || p.close != 4408 {
+		t.Errorf("no audio after ready: got %q %q close %d, want timeout 4408", p.terminalKind(), p.errorCode(), p.close)
+	}
+}
+
+// T8: progress keeps the socket alive while a slow lane works.
+func TestProgressKeepAlive(t *testing.T) {
+	server, backend := newTestServer(t, Config{Agent: "loopback", ProgressInterval: 50 * time.Millisecond})
+	backend.agent = fakeAgent{delay: 300 * time.Millisecond}
+	p := newChecker(server.URL).run(operation{
+		route:    RouteAsk,
+		start:    textStartFrame("progress", "what time is standup"),
+		finalize: map[string]any{"type": "finalize"},
+	})
+	if p.terminalKind() != "result" {
+		t.Fatalf("got %q %q", p.terminalKind(), p.errorCode())
+	}
+	progressed := 0
+	for _, event := range p.events {
+		if event["event"] == "result" {
+			break
+		}
+		if event["event"] != "progress" {
+			continue
+		}
+		progressed++
+		if event["op_id"] != p.ready["op_id"] {
+			t.Errorf("progress op_id = %v, want %v", event["op_id"], p.ready["op_id"])
+		}
+		if _, ok := event["elapsed_ms"].(float64); !ok {
+			t.Errorf("progress has no elapsed_ms: %#v", event)
+		}
+	}
+	if progressed == 0 {
+		t.Error("no progress event arrived before the result")
+	}
+}
+
+// T9: a cleanup lane that fails still returns the raw transcript.
+func TestCleanupFailureReturnsRawTranscript(t *testing.T) {
+	server, backend := newTestServer(t, Config{Cleanup: "loopback"})
+	if backend.spec == nil {
+		t.Skip("cleanup spec not found")
+	}
+	backend.cleanup = failingCleanup{}
+	chunks := chunkAudio(tone(1500), 200)
+	op := audioOp("cleanup-fails", chunks)
+	op.finalize["polish"] = true
+	p := newChecker(server.URL).run(op)
+	if p.terminalKind() != "result" {
+		t.Fatalf("got %q %q", p.terminalKind(), p.errorCode())
+	}
+	result, _ := p.terminal["result"].(map[string]any)
+	if result["polish_applied"] != false {
+		t.Errorf("polish_applied = %v, want false", result["polish_applied"])
+	}
+	if result["text"] != result["raw_transcript"] {
+		t.Errorf("text = %v, raw_transcript = %v", result["text"], result["raw_transcript"])
+	}
+}
+
+// T10: the protocol_error and bad_request shapes a client can produce
+// after the start frame.
+func TestProtocolErrorsAfterStart(t *testing.T) {
+	server := fullTestServer(t)
+	checker := newChecker(server.URL)
+	chunks := chunkAudio(tone(1000), 200)
+	cases := []struct {
+		name string
+		op   operation
+		code string
+	}{
+		{"binary before ready", operation{route: RouteDictate, binaryFirst: chunks[0]}, ErrProtocolError},
+		{"binary on text input", operation{route: RouteDictate, start: textStartFrame("text-binary", "hello"), audio: chunks}, ErrProtocolError},
+		{"unknown control type", operation{route: RouteDictate, start: startFrame("unknown", nil), finalize: map[string]any{"type": "rewind"}}, ErrProtocolError},
+		{"second start", operation{route: RouteDictate, start: startFrame("twice", nil), finalize: startFrame("twice", nil)}, ErrProtocolError},
+		{"audio totals on text finalize", operation{route: RouteDictate, start: textStartFrame("text-totals", "hello"), finalize: map[string]any{"type": "finalize", "audio": totals(chunks)}}, ErrBadRequest},
+		{"no audio totals on audio finalize", operation{route: RouteDictate, start: startFrame("no-totals", nil), audio: chunks, finalize: map[string]any{"type": "finalize"}}, ErrBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := checker.run(tc.op)
+			if p.errorCode() != tc.code {
+				t.Fatalf("got %q %q, want %s (transport error: %v)", p.terminalKind(), p.errorCode(), tc.code, p.err)
+			}
+			if p.close != 4400 {
+				t.Errorf("close code %d, want 4400", p.close)
+			}
+		})
+	}
+}
+
+// T11: an operation that failed leaves nothing to replay.
+func TestFailuresAreNotCached(t *testing.T) {
+	server, _ := newTestServer(t, Config{})
+	checker := newChecker(server.URL)
+	short := chunkAudio(tone(100), 50)
+	if p := checker.run(audioOp("failed", short)); p.errorCode() != ErrAudioTooShort {
+		t.Fatalf("got %q %q, want audio_too_short", p.terminalKind(), p.errorCode())
+	}
+	replay := audioOp("failed", chunkAudio(tone(1500), 200))
+	replay.hold = 300 * time.Millisecond
+	p := checker.run(replay)
+	if p.ready == nil {
+		t.Fatal("the replay never got ready")
+	}
+	if p.fromCache {
+		t.Fatal("a failed operation was replayed from the cache")
+	}
+	if p.terminalKind() != "result" {
+		t.Fatalf("the replay got %q %q, want a fresh result", p.terminalKind(), p.errorCode())
+	}
+}
+
+// T12: a streaming recognizer that dies mid-operation falls back to the
+// batch route over all of the audio.
+func TestStreamDiesMidOperation(t *testing.T) {
+	server, backend := newTestServer(t, Config{})
+	backend.stt = &fakeSTT{streaming: true, writeFails: true}
+	pcm := tone(3000)
+	chunks := chunkAudio(pcm, 200)
+	p := newChecker(server.URL).run(audioOp("stream-dies", chunks))
+	if p.terminalKind() != "result" {
+		t.Fatalf("got %q %q", p.terminalKind(), p.errorCode())
+	}
+	if p.ready["stt"] != "streaming" {
+		t.Errorf("ready.stt = %v, want streaming", p.ready["stt"])
+	}
+	result, _ := p.terminal["result"].(map[string]any)
+	if result["stt_route"] != "fallback" {
+		t.Errorf("stt_route = %v, want fallback", result["stt_route"])
+	}
+	if want := loopbackWords(pcm, nil); result["raw_transcript"] != want {
+		t.Errorf("raw_transcript = %q, want the whole audio transcribed: %q", result["raw_transcript"], want)
+	}
+	if len(p.partials) > 1 {
+		t.Errorf("%d partials arrived after the stream died, want at most 1", len(p.partials))
+	}
+}
+
+// T13: transcript travels with audio input on /ask and /imagine and is
+// absent for text; audio with no recognizer is transcription_failed.
+func TestTranscriptOnAskAndImagine(t *testing.T) {
+	server := fullTestServer(t)
+	checker := newChecker(server.URL)
+	chunks := chunkAudio(tone(2000), 200)
+	for _, route := range []string{RouteAsk, RouteImagine} {
+		spoken := audioOp("spoken-"+route, chunks)
+		spoken.route = route
+		p := checker.run(spoken)
+		if p.terminalKind() != "result" {
+			t.Fatalf("audio /%s got %q %q", route, p.terminalKind(), p.errorCode())
+		}
+		result, _ := p.terminal["result"].(map[string]any)
+		if text, _ := result["transcript"].(string); text == "" {
+			t.Errorf("audio /%s result has no transcript", route)
+		}
+
+		p = checker.run(operation{route: route, start: textStartFrame("typed-"+route, "a quiet harbour"), finalize: map[string]any{"type": "finalize"}})
+		if p.terminalKind() != "result" {
+			t.Fatalf("text /%s got %q %q", route, p.terminalKind(), p.errorCode())
+		}
+		result, _ = p.terminal["result"].(map[string]any)
+		if _, present := result["transcript"]; present {
+			t.Errorf("text /%s result carries a transcript", route)
+		}
+	}
+
+	deaf, _ := newTestServer(t, Config{STT: "none", Agent: "loopback"})
+	spoken := audioOp("deaf", chunks)
+	spoken.route = RouteAsk
+	p := newChecker(deaf.URL).run(spoken)
+	if p.errorCode() != ErrTranscriptionFailed || p.close != 4503 {
+		t.Fatalf("audio /ask with no recognizer got %q %q close %d, want transcription_failed 4503", p.terminalKind(), p.errorCode(), p.close)
+	}
+	if p.terminal["retryable"] != true {
+		t.Errorf("retryable = %v, want true", p.terminal["retryable"])
+	}
+}
+
+// T14: the result echoes exactly the audio the server consumed.
+func TestResultAudioEcho(t *testing.T) {
+	server, _ := newTestServer(t, Config{})
+	chunks := chunkAudio(tone(2100), 300)
+	p := newChecker(server.URL).run(audioOp("echo", chunks))
+	if p.terminalKind() != "result" {
+		t.Fatalf("got %q %q", p.terminalKind(), p.errorCode())
+	}
+	echo, _ := p.terminal["audio"].(map[string]any)
+	want := totals(chunks)
+	for _, field := range []string{"frames", "bytes", "duration_ms"} {
+		if got, _ := echo[field].(float64); int(got) != want[field].(int) {
+			t.Errorf("result.audio.%s = %v, sent %v", field, echo[field], want[field])
+		}
+	}
 }

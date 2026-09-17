@@ -24,12 +24,12 @@ const (
 	DefaultMaxTextChars         = 4000
 	DefaultMaxVocabularyEntries = 200
 
-	// startDeadline, frameGap, and progressEvery are the timing rules of
-	// §4: start within 10 s of the upgrade, no 60 s hole in the audio,
-	// and never 20 s of server silence after finalize.
-	startDeadline = 10 * time.Second
-	frameGap      = 60 * time.Second
-	progressEvery = 5 * time.Second
+	// The timing rules of §4: start within 10 s of the upgrade, no 60 s
+	// hole in the audio, and never 20 s of server silence after finalize.
+	// Progress goes out every 5 s, well inside the 20 s bound.
+	DefaultStartDeadline    = 10 * time.Second
+	DefaultFrameGap         = 60 * time.Second
+	DefaultProgressInterval = 5 * time.Second
 
 	// bytesPerSecond is PCM16 mono at 16 kHz — the only codec in V4.
 	bytesPerSecond = 32000
@@ -62,6 +62,12 @@ type Config struct {
 	LaneTimeout    time.Duration
 	ResultCacheTTL time.Duration
 
+	// The §4 timing rules. Zero means the protocol default; a deployment
+	// has no reason to change them, but tests do.
+	StartDeadline    time.Duration
+	FrameGap         time.Duration
+	ProgressInterval time.Duration
+
 	// SpecDir overrides the location of spec/cleanup/v1.
 	SpecDir string
 
@@ -92,6 +98,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.ResultCacheTTL <= 0 {
 		c.ResultCacheTTL = 5 * time.Minute
+	}
+	if c.StartDeadline <= 0 {
+		c.StartDeadline = DefaultStartDeadline
+	}
+	if c.FrameGap <= 0 {
+		c.FrameGap = DefaultFrameGap
+	}
+	if c.ProgressInterval <= 0 {
+		c.ProgressInterval = DefaultProgressInterval
 	}
 	if c.Logger == nil {
 		c.Logger = log.New(os.Stderr, "caret-v4 ", log.LstdFlags)
@@ -254,7 +269,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	presented, valid := s.checkAuth(r.Header.Get("Authorization"))
+	presented, valid, _ := s.checkAuth(r.Header.Get("Authorization"))
 	served := func(route string) bool { return s.routeEnabled(route) }
 	partial := func(route string) bool { return s.stt != nil && s.stt.Streaming() && served(route) }
 
@@ -329,24 +344,26 @@ func authReport(presented, valid bool) map[string]any {
 
 // checkAuth reports whether a credential was presented and whether it is
 // one of ours. The comparison is over sha256 digests so it is constant
-// time in both content and length.
-func (s *Server) checkAuth(header string) (presented, valid bool) {
+// time in both content and length. The digest comes back as well: it is
+// what keys the result cache per credential, so the raw credential never
+// travels past this function.
+func (s *Server) checkAuth(header string) (presented, valid bool, digest string) {
 	token := strings.TrimSpace(header)
 	if token == "" {
-		return false, false
+		return false, false, ""
 	}
 	if len(token) > 7 && strings.EqualFold(token[:7], "bearer ") {
 		token = strings.TrimSpace(token[7:])
 	}
 	if token == "" {
-		return false, false
+		return false, false, ""
 	}
 	sum := sha256.Sum256([]byte(token))
 	match := 0
 	for _, key := range s.keys {
 		match |= subtle.ConstantTimeCompare(sum[:], key[:])
 	}
-	return true, match == 1
+	return true, match == 1, hex.EncodeToString(sum[:])
 }
 
 // ----------------------------------------------------------------- routes
@@ -383,9 +400,11 @@ func newID(prefix string) string {
 // ---------------------------------------------------------- result cache
 
 // resultCache is the whole of §8's idempotency: a successful terminal
-// result, keyed by route and client_request_id, for a few minutes.
-// Failures are never cached — retrying a failure is the point of
-// retrying.
+// result, keyed by credential digest, route, and client_request_id, for
+// a few minutes. Failures are never cached — retrying a failure is the
+// point of retrying. The credential is part of the key so two devices
+// that happen to pick the same client_request_id never see each other's
+// result. §10: an entry is purged the moment a replay collects it.
 type resultCache struct {
 	ttl     time.Duration
 	mu      sync.Mutex
@@ -403,21 +422,28 @@ func newResultCache(ttl time.Duration) *resultCache {
 	return &resultCache{ttl: ttl, entries: map[string]cacheEntry{}}
 }
 
-func (c *resultCache) key(route, clientRequestID string) string {
-	return route + "\x00" + clientRequestID
+func (c *resultCache) key(credential, route, clientRequestID string) string {
+	return credential + "\x00" + route + "\x00" + clientRequestID
 }
 
-func (c *resultCache) get(route, clientRequestID string) (cacheEntry, bool) {
+// take returns the cached result for a replay and removes it in the same
+// operation, so one replay collects it and the next one does the work.
+func (c *resultCache) take(credential, route, clientRequestID string) (cacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entry, ok := c.entries[c.key(route, clientRequestID)]
-	if !ok || time.Now().After(entry.expires) {
+	key := c.key(credential, route, clientRequestID)
+	entry, ok := c.entries[key]
+	if !ok {
+		return cacheEntry{}, false
+	}
+	delete(c.entries, key)
+	if time.Now().After(entry.expires) {
 		return cacheEntry{}, false
 	}
 	return entry, true
 }
 
-func (c *resultCache) put(route, clientRequestID, requestID string, result any, audio *AudioSpec) {
+func (c *resultCache) put(credential, route, clientRequestID, requestID string, result any, audio *AudioSpec) {
 	if clientRequestID == "" {
 		return
 	}
@@ -429,7 +455,7 @@ func (c *resultCache) put(route, clientRequestID, requestID string, result any, 
 			delete(c.entries, key)
 		}
 	}
-	c.entries[c.key(route, clientRequestID)] = cacheEntry{
+	c.entries[c.key(credential, route, clientRequestID)] = cacheEntry{
 		requestID: requestID,
 		result:    result,
 		audio:     audio,

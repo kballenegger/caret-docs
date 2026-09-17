@@ -25,7 +25,7 @@
     <div class="group"><span>Start</span>
       <ul>
         <li><a href="/" aria-current="page">Overview</a></li>
-        <li><a href="/agent/">Agent instructions<small>build a backend with your coding agent</small></a></li>
+        <li><a href="/agent/">Agent instructions<small>set up the reference with your coding agent</small></a></li>
       </ul>
     </div>
     <div class="group"><span>caret/v4</span>
@@ -85,19 +85,22 @@
       auth owned by the backend, per-operation vocabulary injection, and a
       reliability story built on client-side replay. The protocol page is
       the complete, normative contract — everything you need to implement
-      either side.
+      either side. Most people never need to: the reference backends
+      below implement it already, and you configure rather than write.
     </p>
     <p><a href="/protocol/"><strong>Read the caret/v4 protocol →</strong></a></p>
   </div>
 
   <div class="card">
-    <h3>Have your agent build it<span class="pill">one URL</span></h3>
+    <h3>Have your agent set it up<span class="pill">one URL</span></h3>
     <p>
       Give a coding agent
       <a href="/agent/instructions.md"><code>docs.typewithcaret.com/agent/instructions.md</code></a>
-      and it has the questions to ask you, the reference backend to run,
-      how to wire a real recognizer, and the checks it must pass before
-      it says the backend works.
+      and it clones the reference backend, wires its adapters to the
+      recognizer and model you already use, secures the credential, runs
+      the conformance checker, and does not call it done until a
+      sentence you dictated comes back through the app. No backend
+      written from scratch.
     </p>
     <p><a href="/agent/"><strong>Agent instructions →</strong></a></p>
   </div>
@@ -111,7 +114,8 @@
       conforming implementations interoperate without coordination. Two
       public reference backends ship in this repository, in Go and in
       Python, each with a conformance checker you can point at any V4
-      backend.
+      backend. Clone one, wire its lanes to your tools, and you have a
+      backend; write your own only for a runtime they cannot run on.
     </p>
     <p><a href="/reference/"><strong>The reference implementation →</strong></a></p>
   </div>

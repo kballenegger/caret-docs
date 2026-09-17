@@ -172,13 +172,14 @@ func eventJSON(fields map[string]any) string {
 	return string(b)
 }
 
-// DictationResult is the /dictate terminal result.
+// DictationResult is the /dictate terminal result. stt_route is absent
+// on text input: nothing was recognized, so there was no route.
 type DictationResult struct {
 	Type          string `json:"type"`
 	Text          string `json:"text"`
 	RawTranscript string `json:"raw_transcript"`
 	PolishApplied bool   `json:"polish_applied"`
-	STTRoute      string `json:"stt_route"`
+	STTRoute      string `json:"stt_route,omitempty"`
 }
 
 // MessageResult is the /ask terminal result.

@@ -2,11 +2,15 @@
 
 It treats the backend under test as a black box at a base URL: any
 language, any host, a production backend or a first attempt written this
-afternoon. It exercises what is easy to get subtly wrong — the finalize
+afternoon. It exercises what is easy to get subtly wrong: the finalize
 totals check, exactly-one-terminal-event ordering after queued partials,
 cumulative partial text, replay under a repeated `client_request_id`,
-honest capabilities against served routes, and §10's error table with
-its close codes.
+cancel before and after finalize, honest capabilities against served
+routes, and §10's error table with its close codes and retryable flags.
+
+What it cannot test from outside (a 10 s start timeout, a 60 s frame
+gap, constant-time credential comparison) it says so, one SKIP line
+each, so an untested rule is visible in the report rather than silent.
 
 The Go implementation ships the same checks. Running each language's
 checker against the other language's server is how this repository knows
@@ -50,6 +54,45 @@ FAIL = "fail"
 SKIP = "skip"
 WARN = "warn"
 
+#: §9's retryable column, spelled out here rather than imported, so the
+#: checker holds a backend to the published table and not to whatever
+#: this package's own server happens to say.
+RETRYABLE_BY_CODE = {
+    "unauthorized": False,
+    "rate_limited": True,
+    "not_supported": False,
+    "protocol_error": False,
+    "bad_request": False,
+    "timeout": True,
+    "audio_incomplete": True,
+    "audio_too_long": False,
+    "audio_too_short": False,
+    "no_speech_detected": False,
+    "transcription_failed": True,
+    "generation_failed": True,
+    "internal_error": True,
+}
+
+#: §2's default when /health advertises no limit.
+DEFAULT_MAX_FRAME_BYTES = 524288
+
+#: How long a replayed start waits for a cached result before the
+#: checker gives up on the SHOULD and completes the operation itself.
+REPLAY_WAIT_SECONDS = 3.0
+
+#: Rules a black-box checker cannot exercise, one SKIP line each.
+UNTESTED = [
+    ("untested.start_timeout", "10 s start timeout is not exercised (would wait 10 s)"),
+    ("untested.frame_gap", "60 s frame-gap timeout is not exercised (would wait 60 s)"),
+    ("untested.audio_too_long", "audio_too_long needs max_audio_seconds of audio; not sent"),
+    ("untested.keepalive", "the 20 s progress keep-alive is not exercised; loopback lanes finish in milliseconds"),
+    ("untested.constant_time_compare", "constant-time credential compare is not observable"),
+    ("untested.audio_buffering",
+     "audio buffering independent of the streaming recognizer is not observable"),
+    ("untested.vocabulary_routing",
+     "vocabulary routing is not black-box testable against a real recognizer"),
+]
+
 
 @dataclass
 class CheckResult:
@@ -71,6 +114,9 @@ class Probe:
     close_code: int = 0
     http_status: int = 0
     error: str = ""
+    #: Whether the uploader sent anything before the operation ended.
+    #: False on a replay answered from cache.
+    uploaded: bool = False
 
     @property
     def terminal_kind(self) -> str:
@@ -79,6 +125,14 @@ class Probe:
     @property
     def error_code(self) -> str:
         return (self.terminal or {}).get("code", "") if self.terminal_kind == "error" else ""
+
+    @property
+    def ready(self) -> dict | None:
+        return next((e for e in self.events if e.get("event") == "ready"), None)
+
+    @property
+    def result(self) -> dict:
+        return (self.terminal or {}).get("result") or {}
 
 
 def tone(ms: int) -> bytes:
@@ -121,6 +175,15 @@ def start_frame(client_request_id: str, **extra) -> dict:
     return frame
 
 
+def text_start_frame(client_request_id: str, text: str) -> dict:
+    return {
+        "type": "start",
+        "protocol": PROTOCOL_VERSION,
+        "client_request_id": client_request_id,
+        "input": {"type": "text", "text": text},
+    }
+
+
 def request_id(label: str) -> str:
     return f"conform-{label}-{time.time_ns()}"
 
@@ -133,6 +196,9 @@ class Checker:
         self.allow_insecure = allow_insecure
         self.verify_tls = verify_tls
         self.timeout = timeout
+        # Every error event any operation receives, checked against §9.
+        self.errors_seen: list[tuple[str, object]] = []
+        self.retryable_mismatches: list[str] = []
 
     # ------------------------------------------------------------- run
 
@@ -193,27 +259,40 @@ class Checker:
             else CheckResult("health.auth_report", FAIL, "no auth object")
         )
 
-        results.append(self._check_bad_credential())
-        if not dictate:
-            results.append(CheckResult("dictate.*", SKIP, "backend reports dictate off"))
-            return results
+        # Auth is checked on a route the backend serves, so a dictate-off
+        # backend is held to §3 rather than failed for an honest /health.
+        auth_route = next((r for r in (ROUTE_DICTATE, ROUTE_ASK, ROUTE_IMAGINE) if caps.get(r)),
+                          ROUTE_DICTATE)
+        results.append(self._check_bad_credential(auth_route))
+        results.append(self._check_missing_credential(auth_route))
 
-        results.extend(self._check_dictate_happy_path(caps))
-        results.append(self._check_audio_incomplete())
-        results.append(self._check_audio_too_short())
-        results.append(self._check_protocol_error())
-        results.append(self._check_bad_vocabulary())
-        results.append(self._check_unknown_fields())
-        results.append(self._check_replay())
-        results.append(self._check_silence())
-        results.append(self._check_text_input(caps))
+        if not dictate:
+            results.append(CheckResult("dictate.*", SKIP,
+                                       "backend reports dictate off; /dictate checks skipped"))
+        else:
+            results.extend(self._check_dictate_happy_path(caps))
+            results.extend(self._check_polish())
+            results.append(self._check_audio_incomplete())
+            results.append(self._check_audio_too_short())
+            results.append(self._check_protocol_error())
+            results.append(self._check_binary_before_ready())
+            results.append(self._check_oversized_frame(health))
+            results.append(self._check_bad_vocabulary())
+            results.append(self._check_unknown_fields())
+            results.extend(self._check_replay())
+            results.extend(self._check_cancel())
+            results.append(self._check_silence())
+            results.append(self._check_text_input(caps))
         results.extend(self._check_unserved_routes(caps))
 
-        results.append(self._check_ask() if ask
+        results.append(self._check_ask(caps) if ask
                        else CheckResult("ask.happy_path", SKIP, "backend does not serve /ask"))
-        results.append(self._check_imagine() if imagine
+        results.append(self._check_imagine(caps) if imagine
                        else CheckResult("imagine.happy_path", SKIP,
                                         "backend does not serve /imagine"))
+
+        results.extend(CheckResult(name, SKIP, detail) for name, detail in UNTESTED)
+        results.append(self._check_retryable_table())
         return results
 
     # ------------------------------------------------------------ HTTP
@@ -242,7 +321,16 @@ class Checker:
 
     def _operate(self, route: str, start: dict | None = None, audio: list | None = None,
                  finalize: dict | None = None, key: str | None = None,
-                 raw_first: str | None = None) -> Probe:
+                 raw_first: str | None = None, binary_first: bytes | None = None,
+                 cancel_after: str = "", upload_delay: float = 0.0) -> Probe:
+        """Run one operation and record everything the server sent.
+
+        `binary_first` goes on the wire before start (or alone), which is
+        how audio-before-ready is provoked. `cancel_after` is "audio" or
+        "finalize": a cancel frame follows that stage. `upload_delay`
+        holds audio back that long unless a terminal event arrives
+        first, which is how a cached replay is told from a fresh run.
+        """
         probe = Probe()
         headers = {}
         credential = self.api_key if key is None else key
@@ -266,6 +354,8 @@ class Checker:
 
         try:
             conn.set_timeout(self.timeout)
+            if binary_first is not None:
+                conn.send_binary(binary_first)
             if raw_first is not None:
                 conn.send_text(raw_first)
             elif start is not None:
@@ -278,12 +368,21 @@ class Checker:
                 # that uploads before it listens deadlocks against a
                 # conforming backend.
                 try:
+                    if upload_delay and stop_sending.wait(upload_delay):
+                        return
                     for chunk in (audio or []):
                         if stop_sending.is_set():
                             return
+                        probe.uploaded = True
                         conn.send_binary(chunk)
+                    if cancel_after == "audio":
+                        send_json({"type": "cancel"})
+                        return
                     if finalize is not None and not stop_sending.is_set():
+                        probe.uploaded = True
                         send_json(finalize)
+                    if cancel_after == "finalize":
+                        send_json({"type": "cancel"})
                 except (OSError, WSError) as exc:
                     send_error.append(str(exc))
 
@@ -318,11 +417,13 @@ class Checker:
                         break
                     probe.terminal = event
                     stop_sending.set()
+                    if kind == "error":
+                        self._note_error(event)
                 # Unknown event types are ignored, per §11.
             stop_sending.set()
             if uploader is not None:
                 uploader.join(timeout=2.0)
-            if probe.terminal is None and send_error and not probe.error:
+            if probe.terminal is None and send_error and not probe.error and not cancel_after:
                 probe.error = f"send failed: {send_error[0]}"
         finally:
             try:
@@ -331,23 +432,47 @@ class Checker:
                 pass
         return probe
 
+    def _note_error(self, event: dict) -> None:
+        """§9: retryable is the one field a future client can rely on,
+        so every error event is held to the table, whichever check
+        provoked it."""
+        code = str(event.get("code", ""))
+        retryable = event.get("retryable")
+        self.errors_seen.append((code, retryable))
+        want = RETRYABLE_BY_CODE.get(code)
+        if want is not None and retryable is not want:
+            self.retryable_mismatches.append(f"{code}: retryable={retryable!r}, want {want}")
+
     # ---------------------------------------------------------- checks
 
-    def _check_bad_credential(self) -> CheckResult:
+    def _check_bad_credential(self, route: str) -> CheckResult:
         chunks = chunk_audio(tone(1000), 200)
-        probe = self._operate(ROUTE_DICTATE, key="definitely-not-a-valid-credential",
+        probe = self._operate(route, key="definitely-not-a-valid-credential",
                               start=start_frame(request_id("auth")), audio=chunks,
                               finalize={"type": "finalize", "audio": totals(chunks)})
+        return self._auth_result("auth.rejects_bad_credential", probe, "a bogus credential")
+
+    def _check_missing_credential(self, route: str) -> CheckResult:
+        """§3: missing is refused the same way as wrong, and a backend
+        with nothing configured fails closed rather than open."""
+        chunks = chunk_audio(tone(1000), 200)
+        probe = self._operate(route, key="",
+                              start=start_frame(request_id("noauth")), audio=chunks,
+                              finalize={"type": "finalize", "audio": totals(chunks)})
+        return self._auth_result("auth.rejects_missing_credential", probe,
+                                 "a missing Authorization header")
+
+    @staticmethod
+    def _auth_result(name: str, probe: Probe, what: str) -> CheckResult:
         if probe.http_status == 401:
-            return CheckResult("auth.rejects_bad_credential", PASS,
-                               "refused the upgrade with HTTP 401")
+            return CheckResult(name, PASS, "refused the upgrade with HTTP 401")
         if probe.error_code == ERR_UNAUTHORIZED:
             if probe.close_code == close_code_for(ERR_UNAUTHORIZED):
-                return CheckResult("auth.rejects_bad_credential", PASS, "unauthorized / 4401")
-            return CheckResult("auth.rejects_bad_credential", FAIL,
+                return CheckResult(name, PASS, "unauthorized / 4401")
+            return CheckResult(name, FAIL,
                                f"unauthorized but close code {probe.close_code}, want 4401")
-        return CheckResult("auth.rejects_bad_credential", FAIL,
-                           f"a bogus credential was not refused "
+        return CheckResult(name, FAIL,
+                           f"{what} was not refused "
                            f"({probe.terminal_kind!r} {probe.error_code!r})")
 
     def _check_dictate_happy_path(self, caps: dict) -> list[CheckResult]:
@@ -364,8 +489,8 @@ class Checker:
             return [CheckResult("dictate.happy_path", FAIL,
                                 f"terminal event was {probe.terminal_kind!r} {probe.error_code!r}")]
 
-        out = []
-        result = probe.terminal.get("result") or {}
+        out = [self._check_ready("lifecycle.ready_shape", probe)]
+        result = probe.result
         out.append(CheckResult("dictate.result_type", PASS) if result.get("type") == "dictation"
                    else CheckResult("dictate.result_type", FAIL,
                                     f"result.type is {result.get('type')!r}"))
@@ -380,11 +505,29 @@ class Checker:
                    if route in ("stream", "fallback")
                    else CheckResult("dictate.stt_route", FAIL,
                                     f"stt_route is {route!r}, want stream or fallback"))
+        applied = result.get("polish_applied")
+        out.append(CheckResult("dictate.polish_true", PASS, f"polish_applied={applied}")
+                   if isinstance(applied, bool)
+                   else CheckResult("dictate.polish_true", FAIL,
+                                    f"polish_applied is {applied!r}, want a boolean"))
         out.append(CheckResult("dictate.close_code", PASS) if probe.close_code == 1000
                    else CheckResult("dictate.close_code", FAIL,
                                     f"close code {probe.close_code}, want 1000"))
         out.append(CheckResult("dictate.request_id", PASS) if probe.terminal.get("request_id")
                    else CheckResult("dictate.request_id", FAIL, "no request_id"))
+
+        # §6: audio echoes what the server consumed, which had better be
+        # what was sent, since the totals check passed.
+        sent = totals(chunks)
+        echoed = probe.terminal.get("audio") or {}
+        if echoed.get("frames") == sent["frames"] and echoed.get("bytes") == sent["bytes"]:
+            out.append(CheckResult("dictate.audio_echo", PASS,
+                                   f"{sent['frames']} frames, {sent['bytes']} bytes"))
+        else:
+            out.append(CheckResult("dictate.audio_echo", FAIL,
+                                   f"result.audio is {echoed.get('frames')!r} frames / "
+                                   f"{echoed.get('bytes')!r} bytes, sent "
+                                   f"{sent['frames']} / {sent['bytes']}"))
 
         terminal_index = next(
             (i for i, e in enumerate(probe.events) if e.get("event") in ("result", "error")), -1
@@ -413,6 +556,44 @@ class Checker:
                        else CheckResult("dictate.partials_cumulative", PASS,
                                         f"{len(probe.partials)} partials"))
         return out
+
+    @staticmethod
+    def _check_ready(name: str, probe: Probe) -> CheckResult:
+        """§4's ready frame: protocol 4, an op_id, and an stt value from
+        the closed set."""
+        ready = probe.ready
+        if ready is None:
+            return CheckResult(name, FAIL, "no ready event")
+        if ready.get("protocol") != PROTOCOL_VERSION:
+            return CheckResult(name, FAIL, f"ready.protocol is {ready.get('protocol')!r}, want 4")
+        if not isinstance(ready.get("op_id"), str) or not ready["op_id"]:
+            return CheckResult(name, FAIL, "ready.op_id is missing or empty")
+        if ready.get("stt") not in ("streaming", "buffered", None):
+            return CheckResult(name, FAIL,
+                               f"ready.stt is {ready.get('stt')!r}, "
+                               f"want streaming, buffered, or null")
+        return CheckResult(name, PASS, f"stt={ready.get('stt')}")
+
+    def _check_polish(self) -> list[CheckResult]:
+        """§5: polish false returns the raw transcript and says so. The
+        polish true half lives in the happy path (dictate.polish_true)."""
+        chunks = chunk_audio(tone(2000), 200)
+        probe = self._operate(ROUTE_DICTATE, start=start_frame(request_id("unpolished")),
+                              audio=chunks,
+                              finalize={"type": "finalize", "audio": totals(chunks),
+                                        "polish": False})
+        if probe.terminal_kind != "result":
+            return [CheckResult("dictate.polish_false", FAIL,
+                                f"polish: false produced {probe.terminal_kind!r} "
+                                f"{probe.error_code!r}")]
+        result = probe.result
+        if result.get("polish_applied") is not False:
+            return [CheckResult("dictate.polish_false", FAIL,
+                                f"polish_applied is {result.get('polish_applied')!r}, want false")]
+        if result.get("text") != result.get("raw_transcript"):
+            return [CheckResult("dictate.polish_false", FAIL,
+                                "text differs from raw_transcript with polish off")]
+        return [CheckResult("dictate.polish_false", PASS)]
 
     def _check_audio_incomplete(self) -> CheckResult:
         chunks = chunk_audio(tone(2000), 200)
@@ -453,6 +634,39 @@ class Checker:
                                f"close code {probe.close_code}, want 4400")
         return CheckResult("errors.protocol_error", PASS)
 
+    def _check_binary_before_ready(self) -> CheckResult:
+        """§4: the client MUST NOT send binary before ready; §9 names it
+        protocol_error."""
+        probe = self._operate(ROUTE_DICTATE, binary_first=tone(200))
+        if probe.error_code != ERR_PROTOCOL_ERROR:
+            return CheckResult("errors.binary_before_ready", FAIL,
+                               f"a binary frame before ready produced "
+                               f"{probe.terminal_kind!r} {probe.error_code!r}")
+        if probe.close_code != close_code_for(ERR_PROTOCOL_ERROR):
+            return CheckResult("errors.binary_before_ready", FAIL,
+                               f"close code {probe.close_code}, want 4400")
+        return CheckResult("errors.binary_before_ready", PASS)
+
+    def _check_oversized_frame(self, health: dict) -> CheckResult:
+        """§4: one byte over max_frame_bytes (advertised or default) is
+        bad_request, close 4400."""
+        limits = health.get("limits") or {}
+        limit = limits.get("max_frame_bytes")
+        if not isinstance(limit, int) or limit <= 0:
+            limit = DEFAULT_MAX_FRAME_BYTES
+        frame = (b"\x01\x00" * (limit // 2 + 1))[:limit + 1]
+        chunks = [frame]
+        probe = self._operate(ROUTE_DICTATE, start=start_frame(request_id("oversize")),
+                              audio=chunks, finalize={"type": "finalize", "audio": totals(chunks)})
+        if probe.error_code != ERR_BAD_REQUEST:
+            return CheckResult("bounds.oversized_frame", FAIL,
+                               f"a {len(frame)} byte frame (limit {limit}) produced "
+                               f"{probe.terminal_kind!r} {probe.error_code!r}")
+        if probe.close_code != close_code_for(ERR_BAD_REQUEST):
+            return CheckResult("bounds.oversized_frame", FAIL,
+                               f"close code {probe.close_code}, want 4400")
+        return CheckResult("bounds.oversized_frame", PASS, f"{len(frame)} bytes, limit {limit}")
+
     def _check_bad_vocabulary(self) -> CheckResult:
         chunks = chunk_audio(tone(1000), 200)
         probe = self._operate(ROUTE_DICTATE,
@@ -462,6 +676,9 @@ class Checker:
         if probe.error_code != ERR_BAD_REQUEST:
             return CheckResult("errors.bad_request", FAIL,
                                f"a 200-character vocabulary entry produced {probe.error_code!r}")
+        if probe.close_code != close_code_for(ERR_BAD_REQUEST):
+            return CheckResult("errors.bad_request", FAIL,
+                               f"close code {probe.close_code}, want 4400")
         return CheckResult("errors.bad_request", PASS)
 
     def _check_unknown_fields(self) -> CheckResult:
@@ -480,26 +697,86 @@ class Checker:
                                f"{probe.error_code!r}")
         return CheckResult("forward_compat.unknown_fields", PASS)
 
-    def _check_replay(self) -> CheckResult:
-        """§8's idempotency rule from the client's side: the same
-        client_request_id, twice, must not produce two different
-        answers."""
+    def _check_replay(self) -> list[CheckResult]:
+        """§8's idempotency rule from the client's side. A replayed start
+        SHOULD get the cached result with no audio sent; if it does not,
+        that is a warning, and the replay is completed normally, which
+        MUST then agree with the original text."""
         identifier = request_id("replay")
         chunks = chunk_audio(tone(2000), 200)
         kwargs = dict(start=start_frame(identifier), audio=chunks,
                       finalize={"type": "finalize", "audio": totals(chunks)})
         first = self._operate(ROUTE_DICTATE, **kwargs)
         if first.terminal_kind != "result":
-            return CheckResult("reliability.replay", FAIL,
-                               f"the first attempt failed with {first.error_code!r}")
-        second = self._operate(ROUTE_DICTATE, **kwargs)
+            return [CheckResult("reliability.replay", FAIL,
+                                f"the first attempt failed with {first.error_code!r}")]
+        original = first.result.get("text")
+
+        second = self._operate(ROUTE_DICTATE, upload_delay=REPLAY_WAIT_SECONDS, **kwargs)
+        if second.terminal_kind == "result" and not second.uploaded:
+            if second.result.get("text") != original:
+                return [CheckResult("reliability.replay", FAIL,
+                                    "the cached replay's text differs from the original")]
+            return [CheckResult("reliability.replay", PASS, "served from cache")]
+
+        out = [CheckResult("reliability.replay", WARN,
+                           f"no cached replay (SHOULD, §8); none within "
+                           f"{REPLAY_WAIT_SECONDS:g} s, so the replay was completed normally")]
         if second.terminal_kind != "result":
-            return CheckResult("reliability.replay", FAIL,
-                               f"the replay failed with {second.error_code!r} {second.error}")
-        if (first.terminal["result"] or {}).get("text") != (second.terminal["result"] or {}).get("text"):
-            return CheckResult("reliability.replay", FAIL,
-                               "the same client_request_id and audio produced different text")
-        return CheckResult("reliability.replay", PASS)
+            out.append(CheckResult("reliability.replay_text", FAIL,
+                                   f"the completed replay failed with {second.error_code!r} "
+                                   f"{second.error}"))
+        elif second.result.get("text") != original:
+            out.append(CheckResult("reliability.replay_text", FAIL,
+                                   "the same client_request_id and audio produced different text"))
+        else:
+            out.append(CheckResult("reliability.replay_text", PASS))
+        return out
+
+    def _check_cancel(self) -> list[CheckResult]:
+        """§4: cancel is valid at any point before the terminal event and
+        closes 1000 with none. After finalize the backend may already be
+        done, in which case exactly one terminal event and a close is
+        the other acceptable answer."""
+        out = []
+        chunks = chunk_audio(tone(1500), 200)
+        probe = self._operate(ROUTE_DICTATE, start=start_frame(request_id("cancel")),
+                              audio=chunks, cancel_after="audio")
+        if probe.terminal is not None:
+            out.append(CheckResult("lifecycle.cancel", FAIL,
+                                   f"cancel produced a terminal {probe.terminal_kind!r} "
+                                   f"{probe.error_code!r}"))
+        elif probe.close_code != 1000:
+            out.append(CheckResult("lifecycle.cancel", FAIL,
+                                   f"close code {probe.close_code}, want 1000 {probe.error}"))
+        else:
+            out.append(CheckResult("lifecycle.cancel", PASS))
+
+        probe = self._operate(ROUTE_DICTATE, start=start_frame(request_id("cancel-late")),
+                              audio=chunks,
+                              finalize={"type": "finalize", "audio": totals(chunks)},
+                              cancel_after="finalize")
+        name = "lifecycle.cancel_after_finalize"
+        if probe.error:
+            out.append(CheckResult(name, FAIL, probe.error))
+        elif probe.terminal is None:
+            out.append(CheckResult(name, PASS, "cancelled, no terminal event")
+                       if probe.close_code == 1000
+                       else CheckResult(name, FAIL,
+                                        f"no terminal event but close code {probe.close_code}"))
+        else:
+            if probe.terminal_kind == "result":
+                want = 1000
+            elif probe.error_code in RETRYABLE_BY_CODE:
+                want = close_code_for(probe.error_code)
+            else:
+                want = probe.close_code  # an unknown code; its close is its own business
+            out.append(CheckResult(name, PASS, f"already done: one {probe.terminal_kind}")
+                       if probe.close_code == want
+                       else CheckResult(name, FAIL,
+                                        f"one {probe.terminal_kind} then close code "
+                                        f"{probe.close_code}, want {want}"))
+        return out
 
     def _check_silence(self) -> CheckResult:
         """Advisory: §8 says an empty transcript from a healthy recognizer
@@ -516,18 +793,16 @@ class Checker:
 
     def _check_text_input(self, caps: dict) -> CheckResult:
         supported = (caps.get("text_input") or {}).get(ROUTE_DICTATE)
-        start = {
-            "type": "start",
-            "protocol": PROTOCOL_VERSION,
-            "client_request_id": request_id("text"),
-            "input": {"type": "text", "text": "lets push the review to thursday"},
-        }
+        start = text_start_frame(request_id("text"), "lets push the review to thursday")
         probe = self._operate(ROUTE_DICTATE, start=start, finalize={"type": "finalize"})
         if supported is False:
             if probe.error_code != ERR_NOT_SUPPORTED:
                 return CheckResult("dictate.text_input", FAIL,
                                    f"text_input is advertised false but text input produced "
                                    f"{probe.error_code!r}")
+            if probe.close_code != close_code_for(ERR_NOT_SUPPORTED):
+                return CheckResult("dictate.text_input", FAIL,
+                                   f"close code {probe.close_code}, want 4404")
             return CheckResult("dictate.text_input", PASS, "honestly refused")
         if probe.terminal_kind != "result":
             return CheckResult("dictate.text_input", FAIL,
@@ -549,46 +824,58 @@ class Checker:
             if probe.http_status == 404:
                 out.append(CheckResult(name, PASS, "HTTP 404 on upgrade"))
             elif probe.error_code == ERR_NOT_SUPPORTED:
-                out.append(CheckResult(name, PASS, "not_supported"))
+                if probe.close_code == close_code_for(ERR_NOT_SUPPORTED):
+                    out.append(CheckResult(name, PASS, "not_supported / 4404"))
+                else:
+                    out.append(CheckResult(name, FAIL,
+                                           f"not_supported but close code {probe.close_code}, "
+                                           f"want 4404"))
             else:
                 out.append(CheckResult(name, FAIL,
                                        f"/{route} is advertised off but answered "
                                        f"{probe.terminal_kind!r} {probe.error_code!r}"))
         return out
 
-    def _check_ask(self) -> CheckResult:
-        start = {
-            "type": "start",
-            "protocol": PROTOCOL_VERSION,
-            "client_request_id": request_id("ask"),
-            "input": {"type": "text", "text": "tell sam i'm running ten minutes late"},
-        }
-        probe = self._operate(ROUTE_ASK, start=start,
-                              finalize={"type": "finalize", "visible_text": ""})
+    def _route_input(self, route: str, caps: dict, label: str, text: str, finalize: dict):
+        """Text input where the backend advertises it, audio otherwise.
+        A backend is never failed for honestly saying text_input false."""
+        if (caps.get("text_input") or {}).get(route):
+            return dict(start=text_start_frame(request_id(label), text),
+                        finalize=finalize), "text input"
+        chunks = chunk_audio(tone(2000), 200)
+        return dict(start=start_frame(request_id(label)), audio=chunks,
+                    finalize={**finalize, "audio": totals(chunks)}), "audio input"
+
+    def _check_ask(self, caps: dict) -> CheckResult:
+        kwargs, mode = self._route_input(
+            ROUTE_ASK, caps, "ask", "tell sam i'm running ten minutes late",
+            {"type": "finalize", "visible_text": ""},
+        )
+        probe = self._operate(ROUTE_ASK, **kwargs)
         if probe.terminal_kind != "result":
             return CheckResult("ask.happy_path", FAIL,
-                               f"terminal event was {probe.terminal_kind!r} {probe.error_code!r}")
-        result = probe.terminal.get("result") or {}
+                               f"terminal event was {probe.terminal_kind!r} {probe.error_code!r} "
+                               f"({mode})")
+        result = probe.result
         if result.get("type") != "message":
             return CheckResult("ask.happy_path", FAIL, f"result.type is {result.get('type')!r}")
         if not (result.get("text") or "").strip():
             return CheckResult("ask.happy_path", FAIL, "result.text is empty")
-        return CheckResult("ask.happy_path", PASS)
+        if mode == "audio input" and not isinstance(result.get("transcript"), str):
+            return CheckResult("ask.happy_path", FAIL, "audio input but no transcript in the result")
+        return CheckResult("ask.happy_path", PASS, mode)
 
-    def _check_imagine(self) -> CheckResult:
-        start = {
-            "type": "start",
-            "protocol": PROTOCOL_VERSION,
-            "client_request_id": request_id("imagine"),
-            "input": {"type": "text", "text": "a lighthouse at dusk in watercolour"},
-        }
-        probe = self._operate(ROUTE_IMAGINE, start=start,
-                              finalize={"type": "finalize", "aspect_ratio": "3:2",
-                                        "quality": "low"})
+    def _check_imagine(self, caps: dict) -> CheckResult:
+        kwargs, mode = self._route_input(
+            ROUTE_IMAGINE, caps, "imagine", "a lighthouse at dusk in watercolour",
+            {"type": "finalize", "aspect_ratio": "3:2", "quality": "low"},
+        )
+        probe = self._operate(ROUTE_IMAGINE, **kwargs)
         if probe.terminal_kind != "result":
             return CheckResult("imagine.happy_path", FAIL,
-                               f"terminal event was {probe.terminal_kind!r} {probe.error_code!r}")
-        result = probe.terminal.get("result") or {}
+                               f"terminal event was {probe.terminal_kind!r} {probe.error_code!r} "
+                               f"({mode})")
+        result = probe.result
         if result.get("type") != "image":
             return CheckResult("imagine.happy_path", FAIL, f"result.type is {result.get('type')!r}")
         try:
@@ -604,7 +891,24 @@ class Checker:
         if str(result.get("sha256", "")).lower() != hashlib.sha256(data).hexdigest():
             return CheckResult("imagine.happy_path", FAIL,
                                "sha256 does not match the delivered bytes")
-        return CheckResult("imagine.happy_path", PASS)
+        if mode == "audio input" and not isinstance(result.get("transcript"), str):
+            return CheckResult("imagine.happy_path", FAIL,
+                               "audio input but no transcript in the result")
+        return CheckResult("imagine.happy_path", PASS, mode)
+
+    def _check_retryable_table(self) -> CheckResult:
+        """Every error event the run received, against §9's retryable
+        column. Codes the table does not know are reported, not judged:
+        the list is append-only."""
+        if self.retryable_mismatches:
+            return CheckResult("errors.retryable_table", FAIL,
+                               "; ".join(self.retryable_mismatches))
+        codes = sorted({code for code, _ in self.errors_seen})
+        unknown = [c for c in codes if c not in RETRYABLE_BY_CODE]
+        detail = f"{len(self.errors_seen)} error events, codes: {', '.join(codes) or 'none'}"
+        if unknown:
+            detail += f"; not in the §9 table: {', '.join(unknown)}"
+        return CheckResult("errors.retryable_table", PASS, detail)
 
 
 def report(results: list[CheckResult], stream) -> bool:
@@ -622,5 +926,6 @@ def report(results: list[CheckResult], stream) -> bool:
     return counts[FAIL] == 0
 
 
-__all__ = ["Checker", "CheckResult", "Probe", "report", "retryable_for",
-           "tone", "silence", "chunk_audio", "totals", "start_frame", "request_id"]
+__all__ = ["Checker", "CheckResult", "Probe", "RETRYABLE_BY_CODE", "report", "retryable_for",
+           "tone", "silence", "chunk_audio", "totals", "start_frame", "text_start_frame",
+           "request_id"]

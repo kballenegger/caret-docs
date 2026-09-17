@@ -13,20 +13,23 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
 
 // The conformance checker.
 //
-// It treats the backend under test as a black box at a base URL — any
+// It treats the backend under test as a black box at a base URL: any
 // language, any host, Caret's own production backend or a first attempt
 // written this afternoon. It exercises what is easy to get subtly wrong:
 // the finalize totals check, exactly-one-terminal-event ordering after
 // queued partials, cumulative partial text, replay under a repeated
-// client_request_id, honest capabilities against served routes, and the
-// error table with its close codes. Exit 0 means a V4 client will be
-// happy.
+// client_request_id, cancel before and after finalize, honest
+// capabilities against served routes, and the error table with its
+// close codes and retryable flags. Exit 0 means a V4 client will be
+// happy. Rules it cannot reach from outside are listed as SKIP so the
+// report says what was not tested rather than implying it was.
 
 // CheckStatus is the outcome of one check.
 type CheckStatus string
@@ -63,7 +66,18 @@ type Checker struct {
 	Timeout time.Duration
 
 	health map[string]any
+
+	// Every operation the checker runs validates the ready event and
+	// the retryable flag of any error it sees; the problems are reported
+	// once at the end.
+	readyCount        int
+	readyProblems     []string
+	retryableProblems []string
 }
+
+// replayHold is how long the replay check waits for a cached result
+// before uploading the audio again.
+const replayHold = 3 * time.Second
 
 // Run executes every check and returns the report. The error is non-nil
 // only when the checker could not start at all.
@@ -143,36 +157,81 @@ func (c *Checker) Run() ([]CheckResult, error) {
 		add("health.auth_report", CheckFail, "no auth object")
 	}
 
-	// ---- auth
-	results = append(results, c.checkBadCredential()...)
-
-	if !dictate {
-		add("dictate.*", CheckSkip, "backend reports dictate off")
-		return results, nil
+	// ---- auth, on a route the backend serves so that a refusal is
+	// about the credential and not the route.
+	authRoute := RouteDictate
+	for _, route := range []string{RouteDictate, RouteAsk, RouteImagine} {
+		if boolCap(caps, route) {
+			authRoute = route
+			break
+		}
 	}
+	results = append(results, c.checkBadCredential(authRoute))
+	results = append(results, c.checkMissingCredential(authRoute))
 
-	results = append(results, c.checkDictateHappyPath(caps)...)
-	results = append(results, c.checkAudioIncomplete())
-	results = append(results, c.checkAudioTooShort())
-	results = append(results, c.checkProtocolError())
-	results = append(results, c.checkBadVocabulary())
-	results = append(results, c.checkUnknownFields())
-	results = append(results, c.checkReplay())
-	results = append(results, c.checkSilence())
-	results = append(results, c.checkTextInput(caps))
+	// ---- the lifecycle, on /dictate
+	if dictate {
+		results = append(results, c.checkDictateHappyPath(caps)...)
+		results = append(results, c.checkPolishFalse())
+		results = append(results, c.checkAudioIncomplete())
+		results = append(results, c.checkAudioTooShort())
+		results = append(results, c.checkOversizedFrame())
+		results = append(results, c.checkProtocolError())
+		results = append(results, c.checkBinaryBeforeReady())
+		results = append(results, c.checkBadVocabulary())
+		results = append(results, c.checkUnknownFields())
+		results = append(results, c.checkReplay()...)
+		results = append(results, c.checkCancel()...)
+		results = append(results, c.checkSilence())
+		results = append(results, c.checkTextInput(caps))
+	} else {
+		add("dictate.*", CheckSkip, "backend reports dictate off; the lifecycle checks need /dictate")
+	}
 	results = append(results, c.checkUnservedRoutes(caps)...)
 
 	if ask {
-		results = append(results, c.checkAsk())
+		results = append(results, c.checkAsk(caps))
 	} else {
 		add("ask.happy_path", CheckSkip, "backend does not serve /ask")
 	}
 	if imagine {
-		results = append(results, c.checkImagine())
+		results = append(results, c.checkImagine(caps))
 	} else {
 		add("imagine.happy_path", CheckSkip, "backend does not serve /imagine")
 	}
+
+	// ---- what every operation above was watching for
+	switch {
+	case len(c.readyProblems) > 0:
+		add("lifecycle.ready_shape", CheckFail, "%s", c.readyProblems[0])
+	case c.readyCount == 0:
+		add("lifecycle.ready_shape", CheckSkip, "no ready event was observed")
+	default:
+		add("lifecycle.ready_shape", CheckPass, "%d ready events checked", c.readyCount)
+	}
+	if len(c.retryableProblems) > 0 {
+		add("errors.retryable_table", CheckFail, "%s", strings.Join(c.retryableProblems, "; "))
+	} else {
+		add("errors.retryable_table", CheckPass, "every observed error carried the §9 retryable flag")
+	}
+
+	// ---- rules a black box cannot show
+	for _, skip := range untestable {
+		add(skip.name, CheckSkip, "%s", skip.why)
+	}
 	return results, nil
+}
+
+// untestable lists the rules the checker cannot reach from outside, so
+// the report names them instead of silently leaving them out.
+var untestable = []struct{ name, why string }{
+	{"untested.start_timeout", "the 10 s start timeout is not exercised; it would cost 10 s per run"},
+	{"untested.frame_gap", "the 60 s frame gap timeout is not exercised; it would cost 60 s per run"},
+	{"untested.audio_too_long", "audio_too_long needs max_audio_seconds of PCM; not uploaded"},
+	{"untested.keepalive", "the 20 s progress keep-alive is not exercised; loopback lanes finish in milliseconds"},
+	{"untested.constant_time_compare", "constant-time credential comparison is not observable over the wire"},
+	{"untested.audio_buffering", "buffering audio independently of the streaming recognizer is not observable from outside"},
+	{"untested.vocabulary_routing", "vocabulary routing is not black-box testable; a real recognizer given synthetic audio cannot be held to it"},
 }
 
 func boolCap(caps map[string]any, name string) bool {
@@ -189,12 +248,21 @@ func nestedCap(caps map[string]any, group, route string) (bool, bool) {
 	return v, ok
 }
 
+// limit reads an advertised limit from health, or the default.
+func (c *Checker) limit(name string, fallback int) int {
+	limits, _ := c.health["limits"].(map[string]any)
+	if v, ok := limits[name].(float64); ok && v > 0 {
+		return int(v)
+	}
+	return fallback
+}
+
 // ------------------------------------------------------------------ HTTP
 
 func (c *Checker) httpClient() *http.Client {
 	transport := &http.Transport{}
 	if c.InsecureTLS {
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // #nosec G402 — opt-in, for a development certificate
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // #nosec G402, opt-in for a development certificate
 	}
 	return &http.Client{Timeout: c.Timeout, Transport: transport}
 }
@@ -229,10 +297,18 @@ func (c *Checker) fetchHealth(key string) (map[string]any, error) {
 type probe struct {
 	events   []map[string]any
 	partials []string
+	ready    map[string]any
 	terminal map[string]any
-	close    uint16
-	httpCode int
-	err      error
+	// terminals counts terminal events; more than one is a failure.
+	terminals int
+	// lateTerminal is a terminal event that arrived after the close.
+	lateTerminal bool
+	// fromCache is a terminal event that arrived while the checker was
+	// still holding its audio back (see operation.hold).
+	fromCache bool
+	close     uint16
+	httpCode  int
+	err       error
 }
 
 func (p *probe) terminalKind() string {
@@ -258,16 +334,34 @@ func (c *Checker) wsURL(route string) string {
 	return base + "/" + route
 }
 
+// When to send cancel, if at all.
+const (
+	cancelAfterAudio    = "after_audio"    // instead of finalize
+	cancelAfterFinalize = "after_finalize" // right behind finalize
+)
+
 // operation is the whole client half of the lifecycle, parameterized
 // enough to drive both the happy path and every error case.
 type operation struct {
-	route     string
-	key       string
-	start     map[string]any
-	audio     [][]byte
-	finalize  map[string]any
+	route    string
+	key      string
+	noAuth   bool // send no Authorization header at all
+	start    map[string]any
+	audio    [][]byte
+	finalize map[string]any
+	// skipStart sends nothing at all and just listens.
 	skipStart bool
-	rawFirst  string // send this text frame instead of start
+	// rawFirst is sent as the first text frame instead of start.
+	rawFirst string
+	// binaryFirst is sent as the very first frame, before start and
+	// without waiting for ready; nothing else follows.
+	binaryFirst []byte
+	// cancel is one of the cancelAfter* moments.
+	cancel string
+	// hold keeps every frame after start back for this long, unless a
+	// terminal event arrives first: how the replay check gives §8's
+	// cached result a chance to show up.
+	hold time.Duration
 }
 
 func (c *Checker) run(op operation) *probe {
@@ -277,12 +371,12 @@ func (c *Checker) run(op operation) *probe {
 	if key == "" {
 		key = c.APIKey
 	}
-	if key != "" {
+	if key != "" && !op.noAuth {
 		header.Set("Authorization", "Bearer "+key)
 	}
 	var tlsCfg *tls.Config
 	if c.InsecureTLS {
-		tlsCfg = &tls.Config{InsecureSkipVerify: true} // #nosec G402 — opt-in
+		tlsCfg = &tls.Config{InsecureSkipVerify: true} // #nosec G402, opt-in
 	}
 	conn, resp, err := Dial(c.wsURL(op.route), DialOptions{Header: header, TLSConfig: tlsCfg, Timeout: c.Timeout})
 	if err != nil {
@@ -294,30 +388,83 @@ func (c *Checker) run(op operation) *probe {
 	}
 	defer conn.Close(1000, "")
 
-	deadline := time.Now().Add(c.Timeout)
-	_ = conn.SetReadDeadline(deadline)
-
 	send := func(v any) bool {
 		b, _ := json.Marshal(v)
 		return conn.WriteText(string(b)) == nil
 	}
 
-	if op.rawFirst != "" {
+	switch {
+	case op.binaryFirst != nil:
+		if conn.WriteBinary(op.binaryFirst) != nil {
+			p.err = errors.New("write failed")
+			return p
+		}
+	case op.rawFirst != "":
 		if conn.WriteText(op.rawFirst) != nil {
 			p.err = errors.New("write failed")
 			return p
 		}
-	} else if !op.skipStart {
+	case !op.skipStart:
 		if !send(op.start) {
 			p.err = errors.New("write failed")
 			return p
 		}
 	}
 
-	sentAudio := false
-	var stopSending atomic.Bool
+	// Sending happens alongside reading, because §8 lets the server
+	// deliver a cached result the moment it says ready and requires the
+	// client to accept it and stop sending. A client that uploads before
+	// it listens deadlocks against a conforming backend.
+	stop := make(chan struct{})
+	var stopOnce sync.Once
+	stopSending := func() { stopOnce.Do(func() { close(stop) }) }
+	stopped := func() bool {
+		select {
+		case <-stop:
+			return true
+		default:
+			return false
+		}
+	}
+	defer stopSending()
+	var uploading atomic.Bool
 	sendErr := make(chan error, 1)
-	defer stopSending.Store(true)
+	report := func(err error) {
+		select {
+		case sendErr <- err:
+		default:
+		}
+	}
+	upload := func() {
+		if op.hold > 0 {
+			select {
+			case <-time.After(op.hold):
+			case <-stop:
+				return
+			}
+		}
+		uploading.Store(true)
+		for _, chunk := range op.audio {
+			if stopped() {
+				return
+			}
+			if err := conn.WriteBinary(chunk); err != nil {
+				report(err)
+				return
+			}
+		}
+		if op.cancel == cancelAfterAudio {
+			send(map[string]any{"type": "cancel"})
+			return
+		}
+		if op.finalize != nil && !stopped() && !send(op.finalize) {
+			report(errors.New("finalize write failed"))
+			return
+		}
+		if op.cancel == cancelAfterFinalize {
+			send(map[string]any{"type": "cancel"})
+		}
+	}
 
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(c.Timeout))
@@ -326,6 +473,9 @@ func (c *Checker) run(op operation) *probe {
 			var ce *CloseError
 			if errors.As(err, &ce) {
 				p.close = ce.Code
+				if op.cancel != "" {
+					p.lateTerminal = c.readLateTerminal(conn)
+				}
 			} else {
 				p.err = err
 			}
@@ -352,49 +502,85 @@ func (c *Checker) run(op operation) *probe {
 		p.events = append(p.events, event)
 		switch event["event"] {
 		case "ready":
-			if sentAudio {
+			if p.ready != nil {
 				continue
 			}
-			sentAudio = true
-			// Sending happens alongside reading, because §8 lets the
-			// server deliver a cached result the moment it says ready
-			// and requires the client to accept it and stop sending. A
-			// client that uploads before it listens deadlocks against a
-			// conforming backend.
-			go func() {
-				for _, chunk := range op.audio {
-					if stopSending.Load() {
-						return
-					}
-					if err := conn.WriteBinary(chunk); err != nil {
-						select {
-						case sendErr <- err:
-						default:
-						}
-						return
-					}
-				}
-				if op.finalize != nil && !stopSending.Load() && !send(op.finalize) {
-					select {
-					case sendErr <- errors.New("finalize write failed"):
-					default:
-					}
-				}
-			}()
+			p.ready = event
+			c.validateReady(event)
+			go upload()
 		case "partial":
 			text, _ := event["text"].(string)
 			p.partials = append(p.partials, text)
 		case "progress":
 		case "result", "error":
+			p.terminals++
 			if p.terminal != nil {
 				p.err = errors.New("more than one terminal event")
-				return p
+				continue
 			}
 			p.terminal = event
-			stopSending.Store(true)
+			p.fromCache = !uploading.Load()
+			if event["event"] == "error" {
+				c.validateRetryable(event)
+			}
+			stopSending()
 		default:
 			// Unknown event types are ignored, per §11.
 		}
+	}
+}
+
+// readLateTerminal looks briefly past the close frame for a terminal
+// event that should not be there. A conforming backend sends the close
+// last, so this normally reads nothing.
+func (c *Checker) readLateTerminal(conn *Conn) bool {
+	_ = conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	for {
+		msg, err := conn.ReadMessage()
+		if err != nil {
+			return false
+		}
+		if msg.Binary {
+			continue
+		}
+		var event map[string]any
+		if json.Unmarshal(msg.Data, &event) == nil && (event["event"] == "result" || event["event"] == "error") {
+			return true
+		}
+	}
+}
+
+// validateReady is §4's ready shape: protocol 4, an op_id, and an stt
+// value a client knows how to act on.
+func (c *Checker) validateReady(event map[string]any) {
+	c.readyCount++
+	problem := func(format string, args ...any) {
+		c.readyProblems = append(c.readyProblems, fmt.Sprintf(format, args...))
+	}
+	if v, _ := event["protocol"].(float64); int(v) != ProtocolVersion {
+		problem("ready.protocol is %v, want %d", event["protocol"], ProtocolVersion)
+	}
+	if id, _ := event["op_id"].(string); id == "" {
+		problem("ready.op_id is missing or empty")
+	}
+	switch stt := event["stt"]; stt {
+	case "streaming", "buffered", nil:
+	default:
+		problem("ready.stt is %v, want streaming, buffered, or null", stt)
+	}
+}
+
+// validateRetryable holds every error event to the §9 table. Codes the
+// checker does not know are left alone: the list is append-only.
+func (c *Checker) validateRetryable(event map[string]any) {
+	code, _ := event["code"].(string)
+	want, known := retryableCodes[code]
+	if !known {
+		return
+	}
+	if got, ok := event["retryable"].(bool); !ok || got != want {
+		c.retryableProblems = append(c.retryableProblems,
+			fmt.Sprintf("%s carried retryable=%v, §9 says %v", code, event["retryable"], want))
 	}
 }
 
@@ -460,32 +646,74 @@ func startFrame(clientRequestID string, extra map[string]any) map[string]any {
 	return frame
 }
 
+func textStartFrame(clientRequestID, text string) map[string]any {
+	return map[string]any{
+		"type":              "start",
+		"protocol":          ProtocolVersion,
+		"client_request_id": clientRequestID,
+		"input":             map[string]any{"type": "text", "text": text},
+	}
+}
+
 func requestID(label string) string {
 	return fmt.Sprintf("conform-%s-%d", label, time.Now().UnixNano())
 }
 
+// audioEchoMatches compares the result's audio object with what the
+// checker sent. duration_ms is left alone: the spec's own example is
+// inconsistent there, so a strict compare would reject real clients.
+func audioEchoMatches(terminal map[string]any, chunks [][]byte) string {
+	echo, ok := terminal["audio"].(map[string]any)
+	if !ok {
+		return "the result carries no audio object"
+	}
+	want := totals(chunks)
+	frames, _ := echo["frames"].(float64)
+	bytesTotal, _ := echo["bytes"].(float64)
+	if int(frames) != want["frames"].(int) || int(bytesTotal) != want["bytes"].(int) {
+		return fmt.Sprintf("result.audio is %d frames / %d bytes, sent %d / %d",
+			int(frames), int(bytesTotal), want["frames"], want["bytes"])
+	}
+	return ""
+}
+
 // ---------------------------------------------------------------- checks
 
-func (c *Checker) checkBadCredential() []CheckResult {
+func (c *Checker) checkBadCredential(route string) CheckResult {
 	chunks := chunkAudio(tone(1000), 200)
 	p := c.run(operation{
-		route:    RouteDictate,
+		route:    route,
 		key:      "definitely-not-a-valid-credential",
 		start:    startFrame(requestID("auth"), nil),
 		audio:    chunks,
 		finalize: map[string]any{"type": "finalize", "audio": totals(chunks)},
 	})
+	return credentialVerdict("auth.rejects_bad_credential", "a bogus credential", p)
+}
+
+// checkMissingCredential is §3's other half: no header at all is
+// unauthorized too, not anonymous service.
+func (c *Checker) checkMissingCredential(route string) CheckResult {
+	p := c.run(operation{
+		route:  route,
+		noAuth: true,
+		start:  startFrame(requestID("noauth"), nil),
+	})
+	return credentialVerdict("auth.rejects_missing_credential", "a missing credential", p)
+}
+
+func credentialVerdict(name, what string, p *probe) CheckResult {
 	switch {
 	case p.httpCode == http.StatusUnauthorized:
-		return []CheckResult{{Name: "auth.rejects_bad_credential", Status: CheckPass, Detail: "refused the upgrade with HTTP 401"}}
+		return CheckResult{Name: name, Status: CheckPass, Detail: "refused the upgrade with HTTP 401"}
 	case p.errorCode() == ErrUnauthorized && p.close == CloseCodeFor(ErrUnauthorized):
-		return []CheckResult{{Name: "auth.rejects_bad_credential", Status: CheckPass, Detail: "unauthorized / 4401"}}
+		return CheckResult{Name: name, Status: CheckPass, Detail: "unauthorized / 4401"}
 	case p.errorCode() == ErrUnauthorized:
-		return []CheckResult{{Name: "auth.rejects_bad_credential", Status: CheckFail,
-			Detail: fmt.Sprintf("unauthorized event but close code %d, want 4401", p.close)}}
+		return CheckResult{Name: name, Status: CheckFail,
+			Detail: fmt.Sprintf("unauthorized event but close code %d, want 4401", p.close)}
 	default:
-		return []CheckResult{{Name: "auth.rejects_bad_credential", Status: CheckFail,
-			Detail: fmt.Sprintf("a bogus credential was not refused (terminal %q, close %d)", p.terminalKind(), p.close)}}
+		return CheckResult{Name: name, Status: CheckFail,
+			Detail: fmt.Sprintf("%s was not refused (terminal %q, close %d)", what, p.terminalKind(), p.close)}
 	}
 }
 
@@ -533,6 +761,16 @@ func (c *Checker) checkDictateHappyPath(caps map[string]any) []CheckResult {
 		fail("dictate.stt_route", "stt_route is %v, want stream or fallback", result["stt_route"])
 	} else {
 		pass("dictate.stt_route", "%s", route)
+	}
+	if applied, ok := result["polish_applied"].(bool); !ok {
+		fail("dictate.polish_true", "polish_applied is %v, want a boolean", result["polish_applied"])
+	} else {
+		pass("dictate.polish_true", "polish_applied=%v", applied)
+	}
+	if problem := audioEchoMatches(p.terminal, chunks); problem != "" {
+		fail("dictate.audio_echo", "%s", problem)
+	} else {
+		pass("dictate.audio_echo", "")
 	}
 	if p.close != 1000 {
 		fail("dictate.close_code", "close code %d, want 1000", p.close)
@@ -583,6 +821,32 @@ func (c *Checker) checkDictateHappyPath(caps map[string]any) []CheckResult {
 	return out
 }
 
+// checkPolishFalse is §5: polish false returns the raw transcript and
+// says so.
+func (c *Checker) checkPolishFalse() CheckResult {
+	chunks := chunkAudio(tone(1500), 200)
+	p := c.run(operation{
+		route:    RouteDictate,
+		start:    startFrame(requestID("unpolished"), nil),
+		audio:    chunks,
+		finalize: map[string]any{"type": "finalize", "audio": totals(chunks), "polish": false},
+	})
+	if p.terminalKind() != "result" {
+		return CheckResult{Name: "dictate.polish_false", Status: CheckFail,
+			Detail: fmt.Sprintf("terminal event was %q %q", p.terminalKind(), p.errorCode())}
+	}
+	result, _ := p.terminal["result"].(map[string]any)
+	if result["polish_applied"] != false {
+		return CheckResult{Name: "dictate.polish_false", Status: CheckFail,
+			Detail: fmt.Sprintf("polish_applied is %v with polish false", result["polish_applied"])}
+	}
+	if result["text"] != result["raw_transcript"] {
+		return CheckResult{Name: "dictate.polish_false", Status: CheckFail,
+			Detail: "text differs from raw_transcript with polish false"}
+	}
+	return CheckResult{Name: "dictate.polish_false", Status: CheckPass}
+}
+
 func (c *Checker) checkAudioIncomplete() CheckResult {
 	chunks := chunkAudio(tone(2000), 200)
 	lie := totals(chunks)
@@ -626,6 +890,26 @@ func (c *Checker) checkAudioTooShort() CheckResult {
 	return CheckResult{Name: "bounds.audio_too_short", Status: CheckPass}
 }
 
+// checkOversizedFrame sends one frame past max_frame_bytes, advertised
+// or default. §9 files that under bad_request.
+func (c *Checker) checkOversizedFrame() CheckResult {
+	size := c.limit("max_frame_bytes", DefaultMaxFrameBytes) + 1
+	p := c.run(operation{
+		route: RouteDictate,
+		start: startFrame(requestID("oversize"), nil),
+		audio: [][]byte{make([]byte, size)},
+	})
+	if p.errorCode() != ErrBadRequest {
+		return CheckResult{Name: "bounds.oversized_frame", Status: CheckFail,
+			Detail: fmt.Sprintf("a %d-byte frame produced %q %q, want bad_request", size, p.terminalKind(), p.errorCode())}
+	}
+	if p.close != CloseCodeFor(ErrBadRequest) {
+		return CheckResult{Name: "bounds.oversized_frame", Status: CheckFail,
+			Detail: fmt.Sprintf("close code %d, want 4400", p.close)}
+	}
+	return CheckResult{Name: "bounds.oversized_frame", Status: CheckPass, Detail: fmt.Sprintf("%d bytes refused", size)}
+}
+
 func (c *Checker) checkProtocolError() CheckResult {
 	p := c.run(operation{
 		route:    RouteDictate,
@@ -642,6 +926,21 @@ func (c *Checker) checkProtocolError() CheckResult {
 	return CheckResult{Name: "errors.protocol_error", Status: CheckPass}
 }
 
+// checkBinaryBeforeReady is §4's "the client MUST NOT send binary
+// frames before ready", seen from the server's side of the rule.
+func (c *Checker) checkBinaryBeforeReady() CheckResult {
+	p := c.run(operation{route: RouteDictate, binaryFirst: tone(200)})
+	if p.errorCode() != ErrProtocolError {
+		return CheckResult{Name: "errors.binary_before_ready", Status: CheckFail,
+			Detail: fmt.Sprintf("audio before start produced %q %q, want protocol_error", p.terminalKind(), p.errorCode())}
+	}
+	if p.close != CloseCodeFor(ErrProtocolError) {
+		return CheckResult{Name: "errors.binary_before_ready", Status: CheckFail,
+			Detail: fmt.Sprintf("close code %d, want 4400", p.close)}
+	}
+	return CheckResult{Name: "errors.binary_before_ready", Status: CheckPass}
+}
+
 func (c *Checker) checkBadVocabulary() CheckResult {
 	chunks := chunkAudio(tone(1000), 200)
 	p := c.run(operation{
@@ -655,6 +954,10 @@ func (c *Checker) checkBadVocabulary() CheckResult {
 	if p.errorCode() != ErrBadRequest {
 		return CheckResult{Name: "errors.bad_request", Status: CheckFail,
 			Detail: fmt.Sprintf("a 200-character vocabulary entry produced %q, want bad_request", p.errorCode())}
+	}
+	if p.close != CloseCodeFor(ErrBadRequest) {
+		return CheckResult{Name: "errors.bad_request", Status: CheckFail,
+			Detail: fmt.Sprintf("close code %d, want 4400", p.close)}
 	}
 	return CheckResult{Name: "errors.bad_request", Status: CheckPass}
 }
@@ -675,9 +978,12 @@ func (c *Checker) checkUnknownFields() CheckResult {
 	return CheckResult{Name: "forward_compat.unknown_fields", Status: CheckPass}
 }
 
-// checkReplay is §8's idempotency rule from the client's side: the same
-// client_request_id, twice, must not produce two different answers.
-func (c *Checker) checkReplay() CheckResult {
+// checkReplay is §8's idempotency rule from the client's side. The replay
+// sends the same start and then waits: a backend that caches answers with
+// the result before any audio goes up. One that does not gets a warning
+// (caching is SHOULD), the audio again, and is then held to producing the
+// same text.
+func (c *Checker) checkReplay() []CheckResult {
 	id := requestID("replay")
 	chunks := chunkAudio(tone(2000), 200)
 	op := operation{
@@ -688,21 +994,85 @@ func (c *Checker) checkReplay() CheckResult {
 	}
 	first := c.run(op)
 	if first.terminalKind() != "result" {
-		return CheckResult{Name: "reliability.replay", Status: CheckFail,
-			Detail: fmt.Sprintf("the first attempt failed with %q", first.errorCode())}
+		return []CheckResult{{Name: "reliability.replay", Status: CheckFail,
+			Detail: fmt.Sprintf("the first attempt failed with %q", first.errorCode())}}
 	}
-	second := c.run(op)
+	replay := op
+	replay.hold = replayHold
+	second := c.run(replay)
 	if second.terminalKind() != "result" {
-		return CheckResult{Name: "reliability.replay", Status: CheckFail,
-			Detail: fmt.Sprintf("the replay failed with %q", second.errorCode())}
+		return []CheckResult{{Name: "reliability.replay", Status: CheckFail,
+			Detail: fmt.Sprintf("the replay failed with %q", second.errorCode())}}
 	}
 	firstResult, _ := first.terminal["result"].(map[string]any)
 	secondResult, _ := second.terminal["result"].(map[string]any)
-	if firstResult["text"] != secondResult["text"] {
-		return CheckResult{Name: "reliability.replay", Status: CheckFail,
-			Detail: "the same client_request_id and the same audio produced different text"}
+	sameText := firstResult["text"] == secondResult["text"]
+	if second.fromCache {
+		if !sameText {
+			return []CheckResult{{Name: "reliability.replay", Status: CheckFail,
+				Detail: "the cached result for a replayed client_request_id carries different text"}}
+		}
+		return []CheckResult{{Name: "reliability.replay", Status: CheckPass, Detail: "cached result delivered after ready"}}
 	}
-	return CheckResult{Name: "reliability.replay", Status: CheckPass}
+	out := []CheckResult{{Name: "reliability.replay", Status: CheckWarn, Detail: "no cached replay (SHOULD, §8)"}}
+	if !sameText {
+		out = append(out, CheckResult{Name: "reliability.replay_consistent", Status: CheckFail,
+			Detail: "the same client_request_id and the same audio produced different text"})
+	} else {
+		out = append(out, CheckResult{Name: "reliability.replay_consistent", Status: CheckPass})
+	}
+	return out
+}
+
+// checkCancel is §4's abandon, twice: mid-upload, where the answer is
+// unambiguous, and right behind finalize, where the backend may already
+// be done and either outcome is fine as long as there is one of them.
+func (c *Checker) checkCancel() []CheckResult {
+	chunks := chunkAudio(tone(1000), 200)
+	p := c.run(operation{
+		route:  RouteDictate,
+		start:  startFrame(requestID("cancel"), nil),
+		audio:  chunks,
+		cancel: cancelAfterAudio,
+	})
+	var out []CheckResult
+	switch {
+	case p.err != nil:
+		out = append(out, CheckResult{Name: "lifecycle.cancel", Status: CheckFail, Detail: p.err.Error()})
+	case p.terminals > 0 || p.lateTerminal:
+		out = append(out, CheckResult{Name: "lifecycle.cancel", Status: CheckFail,
+			Detail: fmt.Sprintf("cancel produced a terminal event (%q %q)", p.terminalKind(), p.errorCode())})
+	case p.close != 1000:
+		out = append(out, CheckResult{Name: "lifecycle.cancel", Status: CheckFail,
+			Detail: fmt.Sprintf("close code %d after cancel, want 1000", p.close)})
+	default:
+		out = append(out, CheckResult{Name: "lifecycle.cancel", Status: CheckPass, Detail: "close 1000, no terminal event"})
+	}
+
+	p = c.run(operation{
+		route:    RouteDictate,
+		start:    startFrame(requestID("cancel-late"), nil),
+		audio:    chunks,
+		finalize: map[string]any{"type": "finalize", "audio": totals(chunks)},
+		cancel:   cancelAfterFinalize,
+	})
+	name := "lifecycle.cancel_after_finalize"
+	switch {
+	case p.terminals > 1:
+		out = append(out, CheckResult{Name: name, Status: CheckFail,
+			Detail: fmt.Sprintf("%d terminal events after finalize then cancel", p.terminals)})
+	case p.lateTerminal:
+		out = append(out, CheckResult{Name: name, Status: CheckFail, Detail: "a terminal event arrived after the close"})
+	case p.terminals == 0 && p.close == 1000:
+		out = append(out, CheckResult{Name: name, Status: CheckPass, Detail: "cancelled: close 1000, no terminal event"})
+	case p.terminals == 1 && p.err == nil && p.close != 0:
+		out = append(out, CheckResult{Name: name, Status: CheckPass,
+			Detail: fmt.Sprintf("already done: one %s then close %d", p.terminalKind(), p.close)})
+	default:
+		out = append(out, CheckResult{Name: name, Status: CheckFail,
+			Detail: fmt.Sprintf("terminal %q, close %d, transport error %v", p.terminalKind(), p.close, p.err)})
+	}
+	return out
 }
 
 // checkSilence is advisory: §8 says an empty transcript from a healthy
@@ -725,12 +1095,7 @@ func (c *Checker) checkSilence() CheckResult {
 
 func (c *Checker) checkTextInput(caps map[string]any) CheckResult {
 	supported, known := nestedCap(caps, "text_input", RouteDictate)
-	start := map[string]any{
-		"type":              "start",
-		"protocol":          ProtocolVersion,
-		"client_request_id": requestID("text"),
-		"input":             map[string]any{"type": "text", "text": "lets push the review to thursday"},
-	}
+	start := textStartFrame(requestID("text"), "lets push the review to thursday")
 	p := c.run(operation{route: RouteDictate, start: start, finalize: map[string]any{"type": "finalize"}})
 	switch {
 	case known && !supported:
@@ -765,8 +1130,11 @@ func (c *Checker) checkUnservedRoutes(caps map[string]any) []CheckResult {
 		switch {
 		case p.httpCode == http.StatusNotFound:
 			out = append(out, CheckResult{Name: name, Status: CheckPass, Detail: "HTTP 404 on upgrade"})
+		case p.errorCode() == ErrNotSupported && p.close == CloseCodeFor(ErrNotSupported):
+			out = append(out, CheckResult{Name: name, Status: CheckPass, Detail: "not_supported / 4404"})
 		case p.errorCode() == ErrNotSupported:
-			out = append(out, CheckResult{Name: name, Status: CheckPass, Detail: "not_supported"})
+			out = append(out, CheckResult{Name: name, Status: CheckFail,
+				Detail: fmt.Sprintf("not_supported event but close code %d, want 4404", p.close)})
 		default:
 			out = append(out, CheckResult{Name: name, Status: CheckFail,
 				Detail: fmt.Sprintf("/%s is advertised off but answered %q %q", route, p.terminalKind(), p.errorCode())})
@@ -775,18 +1143,27 @@ func (c *Checker) checkUnservedRoutes(caps map[string]any) []CheckResult {
 	return out
 }
 
-func (c *Checker) checkAsk() CheckResult {
-	start := map[string]any{
-		"type":              "start",
-		"protocol":          ProtocolVersion,
-		"client_request_id": requestID("ask"),
-		"input":             map[string]any{"type": "text", "text": "tell sam i'm running ten minutes late"},
+// routeInput picks the input mode for a served route from its own
+// capabilities: text when text_input says so, audio otherwise. A backend
+// that honestly advertises text_input false is never failed for it.
+func (c *Checker) routeInput(caps map[string]any, route, label, text string) (op operation, chunks [][]byte) {
+	op = operation{route: route}
+	if supported, _ := nestedCap(caps, "text_input", route); supported {
+		op.start = textStartFrame(requestID(label), text)
+		op.finalize = map[string]any{"type": "finalize"}
+		return op, nil
 	}
-	p := c.run(operation{
-		route:    RouteAsk,
-		start:    start,
-		finalize: map[string]any{"type": "finalize", "visible_text": ""},
-	})
+	chunks = chunkAudio(tone(2000), 200)
+	op.start = startFrame(requestID(label), nil)
+	op.audio = chunks
+	op.finalize = map[string]any{"type": "finalize", "audio": totals(chunks)}
+	return op, chunks
+}
+
+func (c *Checker) checkAsk(caps map[string]any) CheckResult {
+	op, chunks := c.routeInput(caps, RouteAsk, "ask", "tell sam i'm running ten minutes late")
+	op.finalize["visible_text"] = ""
+	p := c.run(op)
 	if p.terminalKind() != "result" {
 		return CheckResult{Name: "ask.happy_path", Status: CheckFail,
 			Detail: fmt.Sprintf("terminal event was %q %q", p.terminalKind(), p.errorCode())}
@@ -799,21 +1176,17 @@ func (c *Checker) checkAsk() CheckResult {
 	if text, _ := result["text"].(string); strings.TrimSpace(text) == "" {
 		return CheckResult{Name: "ask.happy_path", Status: CheckFail, Detail: "result.text is empty"}
 	}
-	return CheckResult{Name: "ask.happy_path", Status: CheckPass}
+	if problem := transcriptEcho(result, chunks); problem != "" {
+		return CheckResult{Name: "ask.happy_path", Status: CheckFail, Detail: problem}
+	}
+	return CheckResult{Name: "ask.happy_path", Status: CheckPass, Detail: inputLabel(chunks)}
 }
 
-func (c *Checker) checkImagine() CheckResult {
-	start := map[string]any{
-		"type":              "start",
-		"protocol":          ProtocolVersion,
-		"client_request_id": requestID("imagine"),
-		"input":             map[string]any{"type": "text", "text": "a lighthouse at dusk in watercolour"},
-	}
-	p := c.run(operation{
-		route:    RouteImagine,
-		start:    start,
-		finalize: map[string]any{"type": "finalize", "aspect_ratio": "3:2", "quality": "low"},
-	})
+func (c *Checker) checkImagine(caps map[string]any) CheckResult {
+	op, chunks := c.routeInput(caps, RouteImagine, "imagine", "a lighthouse at dusk in watercolour")
+	op.finalize["aspect_ratio"] = "3:2"
+	op.finalize["quality"] = "low"
+	p := c.run(op)
 	if p.terminalKind() != "result" {
 		return CheckResult{Name: "imagine.happy_path", Status: CheckFail,
 			Detail: fmt.Sprintf("terminal event was %q %q", p.terminalKind(), p.errorCode())}
@@ -839,7 +1212,30 @@ func (c *Checker) checkImagine() CheckResult {
 	if got, _ := result["sha256"].(string); !strings.EqualFold(got, hex.EncodeToString(sum[:])) {
 		return CheckResult{Name: "imagine.happy_path", Status: CheckFail, Detail: "sha256 does not match the delivered bytes"}
 	}
-	return CheckResult{Name: "imagine.happy_path", Status: CheckPass}
+	if problem := transcriptEcho(result, chunks); problem != "" {
+		return CheckResult{Name: "imagine.happy_path", Status: CheckFail, Detail: problem}
+	}
+	return CheckResult{Name: "imagine.happy_path", Status: CheckPass, Detail: inputLabel(chunks)}
+}
+
+// transcriptEcho is §6's "audio input only" on transcript: present when
+// the checker spoke, absent when it typed.
+func transcriptEcho(result map[string]any, chunks [][]byte) string {
+	_, present := result["transcript"]
+	switch {
+	case chunks != nil && !present:
+		return "audio input but the result carries no transcript"
+	case chunks == nil && present:
+		return "text input but the result carries a transcript"
+	}
+	return ""
+}
+
+func inputLabel(chunks [][]byte) string {
+	if chunks == nil {
+		return "text input"
+	}
+	return "audio input"
 }
 
 // ---------------------------------------------------------------- report

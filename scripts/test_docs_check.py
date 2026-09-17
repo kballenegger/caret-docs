@@ -197,9 +197,26 @@ class AgentInstructionsTests(unittest.TestCase):
     def test_points_at_the_current_spec_and_reference(self):
         self.assertIn("https://docs.typewithcaret.com/protocol/", self.md)
         self.assertIn("github.com/kballenegger/caret-docs/tree/main/reference", self.md)
-        for section in ("Ask before you build", "Loopback is not transcription",
-                        "Protect secrets", "Verify before you say it works"):
+        for section in ("Ask before you build", "Clone and run the reference on loopback",
+                        "Wire the provider adapters", "Secure the credential",
+                        "Loopback is not transcription", "Verify before you say it works",
+                        "Only if the reference cannot serve them"):
             self.assertIn(section, self.md)
+
+    def test_reference_first_and_spec_as_fallback(self):
+        # The agent clones and configures the reference; the protocol page
+        # is the fallback and must come after the reference in the text.
+        self.assertIn("do not write a backend", self.md.lower())
+        self.assertLess(self.md.index("tree/main/reference"), self.md.index("docs.typewithcaret.com/protocol/"))
+        self.assertIn("command:", self.md)
+        self.assertIn("audio_base64", self.md)
+        self.assertIn("Do not add a vendor", self.md)
+        self.assertLess(self.md.index("## 7. Verify"), self.md.index("## 9. Only if"))
+        for page in ("index.html", "reference/index.html", "protocol/index.html"):
+            html = (docs_check.DOCS / page).read_text(encoding="utf-8")
+            with self.subTest(page=page):
+                self.assertIn('href="/reference/"', html)
+                self.assertIn('href="/agent/"', html)
 
     def test_every_command_names_a_path_that_exists(self):
         for rel in ("reference/go/cmd/caret-v4-backend", "reference/go/cmd/caret-v4-conform",

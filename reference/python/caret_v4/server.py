@@ -26,7 +26,12 @@ from .protocol import (
     ROUTE_IMAGINE,
     ROUTES,
 )
-from .session import Session
+from .session import (
+    FRAME_GAP_SECONDS,
+    PROGRESS_EVERY_SECONDS,
+    START_DEADLINE_SECONDS,
+    Session,
+)
 from .ws import WSError, upgrade
 
 VERSION = "1.0.0"
@@ -40,35 +45,39 @@ DEFAULT_RESULT_CACHE_TTL_SECONDS = 600.0
 
 
 class ResultCache:
-    """Successful terminal results, keyed by route and client_request_id.
+    """Successful terminal results, keyed by credential, route, and
+    client_request_id.
 
     Successes only: §8 is explicit that retrying a failure is the point
     of retrying, so a cached error would defeat the mechanism it is
-    meant to support.
+    meant to support. The credential is part of the key so two devices
+    that happen to pick the same client_request_id never see each
+    other's answer; it is the digest the server already compares
+    against, never the presented string.
     """
 
     def __init__(self, ttl: float = DEFAULT_RESULT_CACHE_TTL_SECONDS) -> None:
         self.ttl = ttl
-        self._entries: dict[tuple[str, str], dict] = {}
+        self._entries: dict[tuple[bytes, str, str], dict] = {}
         self._lock = threading.Lock()
 
-    def get(self, route: str, client_request_id: str):
+    def take(self, credential: bytes, route: str, client_request_id: str):
+        """Get and delete: §10 says a cached result is purged on delivery
+        of a replay, so a second replay does the work again."""
         with self._lock:
-            entry = self._entries.get((route, client_request_id))
-            if entry is None:
-                return None
-            if time.monotonic() - entry["at"] > self.ttl:
-                del self._entries[(route, client_request_id)]
+            entry = self._entries.pop((credential, route, client_request_id), None)
+            if entry is None or time.monotonic() - entry["at"] > self.ttl:
                 return None
             return entry
 
-    def put(self, route: str, client_request_id: str, request_id: str, result, audio) -> None:
+    def put(self, credential: bytes, route: str, client_request_id: str,
+            request_id: str, result, audio) -> None:
         now = time.monotonic()
         with self._lock:
             for key, entry in list(self._entries.items()):
                 if now - entry["at"] > self.ttl:
                     del self._entries[key]
-            self._entries[(route, client_request_id)] = {
+            self._entries[(credential, route, client_request_id)] = {
                 "at": now, "request_id": request_id, "result": result, "audio": audio,
             }
 
@@ -90,6 +99,9 @@ class Server:
         max_vocabulary_entries: int = DEFAULT_MAX_VOCABULARY_ENTRIES,
         lane_timeout: float = 120.0,
         result_cache_ttl: float = DEFAULT_RESULT_CACHE_TTL_SECONDS,
+        start_deadline: float = START_DEADLINE_SECONDS,
+        frame_gap: float = FRAME_GAP_SECONDS,
+        progress_interval: float = PROGRESS_EVERY_SECONDS,
         spec_dir: str = "",
         logger: logging.Logger | None = None,
     ) -> None:
@@ -100,12 +112,19 @@ class Server:
         self.max_text_chars = max_text_chars
         self.max_vocabulary_entries = max_vocabulary_entries
         self.lane_timeout = lane_timeout
+        # §4's bounds. Configurable so a test can hit them in
+        # milliseconds; the defaults are the protocol's.
+        self.start_deadline = start_deadline
+        self.frame_gap = frame_gap
+        self.progress_interval = progress_interval
         self.log = logger or logging.getLogger("caret_v4")
         self.cache = ResultCache(result_cache_ttl)
         self.blockers: list[dict] = []
 
         # A malformed lane spec is a startup failure: better a backend
-        # that will not start than one that fails every dictation.
+        # that will not start than one that fails every dictation. A
+        # lane may also be passed as an object, which is how the tests
+        # plug in a provider that fails on cue.
         self.stt = lanes.resolve_stt(stt, lane_timeout)
         self.agent = lanes.resolve_agent(agent, lane_timeout)
         self.image = lanes.resolve_image(image, lane_timeout)
@@ -162,27 +181,37 @@ class Server:
             return False
         return bool(getattr(self.stt, "uses_vocabulary", False)) or self.cleanup is not None
 
-    def credential_valid(self, authorization: str) -> bool:
-        """Constant-time in both content and length: the comparison runs
-        against every configured key and the digests are fixed width, so
-        a wrong key and a wrong-length key take the same path."""
+    def credential_digest(self, authorization: str) -> bytes:
+        """The SHA-256 of the presented bearer credential, or empty
+        bytes when none was presented. This is what auth compares and
+        what the result cache is keyed on; the credential itself is not
+        kept."""
         prefix = "bearer "
         presented = ""
         if authorization and authorization[:len(prefix)].lower() == prefix:
             presented = authorization[len(prefix):].strip()
-        if not presented or not self._key_digests:
+        if not presented:
+            return b""
+        return hashlib.sha256(presented.encode("utf-8")).digest()
+
+    def credential_valid(self, authorization: str) -> bool:
+        """Constant-time in both content and length: the comparison runs
+        against every configured key and the digests are fixed width, so
+        a wrong key and a wrong-length key take the same path."""
+        digest = self.credential_digest(authorization)
+        if not digest or not self._key_digests:
             return False
-        digest = hashlib.sha256(presented.encode("utf-8")).digest()
         valid = False
         for known in self._key_digests:
             valid |= hmac.compare_digest(digest, known)
         return bool(valid)
 
-    def cache_get(self, route: str, client_request_id: str):
-        return self.cache.get(route, client_request_id)
+    def cache_take(self, credential: bytes, route: str, client_request_id: str):
+        return self.cache.take(credential, route, client_request_id)
 
-    def cache_put(self, route: str, client_request_id: str, request_id: str, result, audio) -> None:
-        self.cache.put(route, client_request_id, request_id, result, audio)
+    def cache_put(self, credential: bytes, route: str, client_request_id: str,
+                  request_id: str, result, audio) -> None:
+        self.cache.put(credential, route, client_request_id, request_id, result, audio)
 
     # ----------------------------------------------------------- health
 

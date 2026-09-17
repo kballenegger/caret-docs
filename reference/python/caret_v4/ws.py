@@ -20,6 +20,7 @@ import os
 import socket
 import ssl
 import struct
+import threading
 import time
 from urllib.parse import urlsplit
 
@@ -65,15 +66,18 @@ def accept_key(key: str) -> str:
 
 
 class Connection:
-    """One WebSocket connection. Not safe for concurrent readers; writes
-    are serialized by the socket's own `sendall`."""
+    """One WebSocket connection. One reader at a time; writes are
+    serialized by a lock, so a pong answered from the reading thread
+    cannot interleave with an event written from another."""
 
     def __init__(self, sock: socket.socket, is_client: bool) -> None:
         self.sock = sock
         self.is_client = is_client
         self.reader = sock.makefile("rb")
         self._closed = False
+        self._close_sent = False
         self._saw_close = False
+        self._write_lock = threading.Lock()
 
     # ---------------------------------------------------------- reading
 
@@ -152,8 +156,6 @@ class Connection:
     # ---------------------------------------------------------- writing
 
     def _write_frame(self, opcode: int, payload: bytes) -> None:
-        if self._closed:
-            raise WSError("connection is closed")
         header = bytearray([0x80 | opcode])
         length = len(payload)
         mask_bit = 0x80 if self.is_client else 0x00
@@ -169,7 +171,12 @@ class Connection:
             mask = os.urandom(4)
             header.extend(mask)
             payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-        self.sock.sendall(bytes(header) + payload)
+        with self._write_lock:
+            if self._close_sent:
+                raise WSError("connection is closed")
+            if opcode == OP_CLOSE:
+                self._close_sent = True
+            self.sock.sendall(bytes(header) + payload)
 
     def send_text(self, text: str) -> None:
         self._write_frame(OP_TEXT, text.encode("utf-8"))
@@ -180,18 +187,29 @@ class Connection:
     def send_ping(self, data: bytes = b"") -> None:
         self._write_frame(OP_PING, data)
 
+    def send_close(self, code: int = 1000, reason: str = "") -> None:
+        """Write the close frame and refuse further writes. The socket
+        stays open for reading, so a thread that owns the read side can
+        collect the peer's close reply and then call `close`."""
+        payload = struct.pack("!H", code) + reason.encode("utf-8")[:123]
+        try:
+            self._write_frame(OP_CLOSE, payload)
+        except (OSError, WSError):
+            pass
+
+    def shutdown(self) -> None:
+        """Unblock a thread waiting in `read_message` on another thread.
+        The reader sees end of stream and raises `WSError`."""
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
     def close(self, code: int = 1000, reason: str = "") -> None:
         if self._closed:
             return
         self._closed = True
-        payload = struct.pack("!H", code) + reason.encode("utf-8")[:123]
-        try:
-            self._closed = False  # _write_frame refuses a closed connection
-            self._write_frame(OP_CLOSE, payload)
-        except OSError:
-            pass
-        finally:
-            self._closed = True
+        self.send_close(code, reason)
         if not self._saw_close:
             deadline = time.monotonic() + CLOSE_DRAIN_SECONDS
             try:
