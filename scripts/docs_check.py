@@ -148,6 +148,8 @@ def check_links(
         target = resolve(link, page_rel)
         if target is None:
             continue
+        if is_retired(target):
+            continue
         if target not in known and target + "/index.html" not in known:
             findings.append(f"{label}/{page_rel}: broken internal link {link!r}")
     return findings
