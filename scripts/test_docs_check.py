@@ -38,20 +38,92 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertIn("/nowhere/", findings[0])
 
-    def test_redirect_stub_must_target_its_matching_archive_page(self):
-        html = '<meta http-equiv="refresh" content="0; url=/legacy/live-dictation/">'
+    def test_redirect_stub_must_target_the_retirement_notice(self):
+        html = '<meta http-equiv="refresh" content="0; url=/legacy/connect/">'
         findings = docs_check.check_stub_target(html, "connect/index.html")
         self.assertEqual(len(findings), 1)
-        self.assertIn("/legacy/connect/", findings[0])
+        self.assertIn("/legacy/", findings[0])
+        ok = '<meta http-equiv="refresh" content="0; url=/legacy/">'
+        self.assertEqual(docs_check.check_stub_target(ok, "connect/index.html"), [])
 
     def test_retired_url_is_flagged_on_active_pages(self):
-        html = '<a href="/your-agent/">old guide</a>'
-        findings = docs_check.check_retired_references(html, "index.html")
-        self.assertEqual(len(findings), 1)
+        for link in ("/your-agent/", "/legacy/your-agent/", "/openapi.yaml",
+                     "/agent-prompts/connect-caret.md",
+                     "/integrations/hermes/caret-connect/SKILL.md"):
+            with self.subTest(link=link):
+                html = f'<a href="{link}">old</a>'
+                findings = docs_check.check_retired_references(html, "index.html")
+                self.assertEqual(len(findings), 1)
 
-    def test_legacy_paths_are_not_retired(self):
-        html = '<a href="/legacy/your-agent/">archived guide</a>'
+    def test_the_notice_itself_is_not_retired(self):
+        html = '<a href="/legacy/">retired</a>'
         self.assertEqual(docs_check.check_retired_references(html, "index.html"), [])
+
+    def test_retired_path_accepts_only_stubs_and_notices(self):
+        page = "<!doctype html><!-- redirect-stub --><meta http-equiv=\"refresh\" content=\"0; url=/legacy/\">"
+        self.assertEqual(docs_check.check_retired_file(page, "connect/index.html"), [])
+        self.assertEqual(len(docs_check.check_retired_file("<h1>Runbook</h1>", "connect/index.html")), 1)
+        self.assertEqual(docs_check.check_retired_file("# Retired\ncaret-docs: retired\n", "openapi.yaml"), [])
+        self.assertEqual(len(docs_check.check_retired_file("openapi: 3.0.0\n", "openapi.yaml")), 1)
+
+    def test_assembled_site_rejects_archived_content(self):
+        import tempfile
+        from pathlib import Path as P
+        with tempfile.TemporaryDirectory() as tmp:
+            site = P(tmp)
+            (site / "legacy" / "your-agent").mkdir(parents=True)
+            (site / "legacy" / "your-agent" / "index.html").write_text("<p>ARCHIVED guide</p>")
+            (site / "protocol").mkdir()
+            (site / "protocol" / "index.html").write_text("<p>ARCHIVED banner on an active page</p>")
+            findings = docs_check.check_site(site)
+        self.assertEqual(len(findings), 2)
+        self.assertTrue(any("your-agent" in f for f in findings))
+        self.assertTrue(any("protocol" in f for f in findings))
+
+
+class SharedShellTests(unittest.TestCase):
+    """Every active page carries the same header and sidebar."""
+
+    def _html(self, rel):
+        return (docs_check.DOCS / rel).read_text(encoding="utf-8")
+
+    def test_every_active_page_marks_itself_current_and_matches_the_overview(self):
+        canonical = docs_check.sidebar_of(self._html("index.html")).replace(' aria-current="page"', "")
+        for url, rel in docs_check.ACTIVE_PAGES.items():
+            with self.subTest(page=rel):
+                html = self._html(rel)
+                self.assertEqual(docs_check.check_shell(html, rel, url, canonical), [])
+                self.assertEqual(html.count('aria-current="page"'), 1)
+
+    def test_sidebar_lists_current_docs_only(self):
+        sidebar = docs_check.sidebar_of(self._html("index.html"))
+        links = docs_check.HREF.findall(sidebar)
+        self.assertEqual(sorted(links), sorted(docs_check.ACTIVE_PAGES))
+
+    def test_wrong_current_link_is_flagged(self):
+        html = self._html("hosted/index.html")
+        canonical = docs_check.sidebar_of(html).replace(' aria-current="page"', "")
+        findings = docs_check.check_shell(html, "hosted/index.html", "/protocol/", canonical)
+        self.assertTrue(any("current" in f for f in findings))
+
+    def test_sidebar_with_retired_link_is_flagged(self):
+        html = self._html("index.html").replace('<a href="/protocol/">', '<a href="/legacy/your-agent/">', 1)
+        canonical = docs_check.sidebar_of(html).replace(' aria-current="page"', "")
+        findings = docs_check.check_shell(html, "index.html", "/", canonical)
+        self.assertTrue(any("retired" in f for f in findings))
+
+    def test_header_links_back_to_the_main_site(self):
+        for rel in docs_check.ACTIVE_PAGES.values():
+            header = docs_check.HEADER.search(self._html(rel)).group(0)
+            self.assertIn('href="https://typewithcaret.com"', header)
+            self.assertIn('aria-expanded="false"', header)
+
+    def test_notice_page_shares_the_shell_without_a_current_link(self):
+        html = self._html(docs_check.NOTICE_PAGE)
+        self.assertIn(docs_check.NOTICE_PAGE_MARKER, html)
+        self.assertEqual(html.count('aria-current="page"'), 0)
+        canonical = docs_check.sidebar_of(self._html("index.html")).replace(' aria-current="page"', "")
+        self.assertEqual(docs_check.sidebar_of(html), canonical)
 
 
 class HostedPageTests(unittest.TestCase):
@@ -80,7 +152,24 @@ class HostedPageTests(unittest.TestCase):
 
 class RepoTests(unittest.TestCase):
     def test_the_docs_tree_passes(self):
-        self.assertEqual(docs_check.main(), 0)
+        self.assertEqual(docs_check.main([]), 0)
+
+    def test_no_archived_pages_remain_under_docs(self):
+        for page in docs_check.DOCS.rglob("*.html"):
+            rel = str(page.relative_to(docs_check.DOCS))
+            text = page.read_text(encoding="utf-8")
+            if docs_check.is_retired(rel):
+                self.assertIn(docs_check.STUB_MARKER, text, rel)
+            else:
+                self.assertNotIn("ARCHIVED —", text, rel)
+
+    def test_retired_prompt_and_schema_paths_are_notices(self):
+        for rel in ("openapi.yaml", "legacy/openapi.yaml",
+                    "agent-prompts/connect-caret.md",
+                    "integrations/hermes/caret-connect/SKILL.md"):
+            text = (docs_check.DOCS / rel).read_text(encoding="utf-8")
+            self.assertIn(docs_check.NOTICE_MARKER, text, rel)
+            self.assertLess(len(text.splitlines()), 15, rel)
 
 
 if __name__ == "__main__":

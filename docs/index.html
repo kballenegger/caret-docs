@@ -9,24 +9,42 @@
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+<a class="skip" href="#content">Skip to content</a>
 <header class="site">
-  <div class="wrap">
-    <img src="/assets/caret-mark.svg" alt="Caret mark">
+  <div class="bar">
+    <img src="/assets/caret-mark.svg" alt="">
     <span class="name"><a href="/">Caret Docs</a></span>
-    <nav>
-      <a href="/" aria-current="page">Overview</a>
-      <a href="/hosted/">Hosted API</a>
-      <a href="/protocol/">Protocol</a>
-      <a href="/reference/">Reference</a>
-      <a href="/migration/">Migration</a>
-      <a href="/cleanup/">Cleanup</a>
-      <a href="/imagine-references/">Imagine</a>
-      <a href="/legacy/">Legacy</a>
-    </nav>
+    <button class="menu" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <a class="home" href="https://typewithcaret.com">typewithcaret.com &rarr;</a>
   </div>
 </header>
 
-<main class="wrap">
+<div class="layout">
+<aside class="sidebar" id="site-nav">
+  <nav aria-label="Documentation">
+    <div class="group"><span>Start</span>
+      <ul>
+        <li><a href="/" aria-current="page">Overview</a></li>
+      </ul>
+    </div>
+    <div class="group"><span>Hosted Caret API</span>
+      <ul>
+        <li><a href="/hosted/">Hosted API<small>api.typewithcaret.com</small></a></li>
+      </ul>
+    </div>
+    <div class="group"><span>Open caret/v4 protocol</span>
+      <ul>
+        <li><a href="/protocol/">Protocol<small>the normative contract</small></a></li>
+        <li><a href="/reference/">Reference<small>Go and Python backends</small></a></li>
+        <li><a href="/migration/">Migration<small>from caret/v2 and v3</small></a></li>
+        <li><a href="/cleanup/">Cleanup spec<small>caret-cleanup/1</small></a></li>
+        <li><a href="/imagine-references/">Imagine references</a></li>
+      </ul>
+    </div>
+  </nav>
+</aside>
+
+<main class="wrap" id="content" tabindex="-1">
   <p class="kicker">Hosted Caret API · open caret/v4 protocol</p>
   <h1>Your keyboard, your agent, your machine.</h1>
   <p class="lead">
@@ -212,9 +230,11 @@
     <code>caret/v2</code> and <code>caret/v3</code> are retired. The
     <a href="/migration/">migration guide</a> maps every old concept to its
     V4 replacement and shows how to serve both contracts at one base URL
-    during cutover — the paths do not collide. Everything pre-V4 is
-    preserved, clearly marked, in the <a href="/legacy/">legacy
-    archive</a>.
+    during cutover — the paths do not collide. The pre-V4 documentation
+    is no longer published; old URLs show a short
+    <a href="/legacy/">retirement notice</a>, and the archived material
+    stays in the repository under
+    <a href="https://github.com/kballenegger/caret-docs/tree/main/legacy"><code>legacy/</code></a>.
   </p>
 
   <p class="note">
@@ -224,18 +244,16 @@
     <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">license</a>.
   </p>
 </main>
+</div>
 
 <footer class="site">
   <div class="wrap">
-    <span>Caret — the agentic iOS keyboard.</span>
-    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
+    <span>Caret, the agentic iOS keyboard.</span>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
-    <a href="/hosted/">Hosted API</a>
-    <a href="/protocol/">Protocol</a>
-    <a href="/reference/">Reference</a>
-    <a href="/migration/">Migration</a>
-    <a href="/legacy/">Legacy archive</a>
+    <a href="https://github.com/kballenegger/caret-docs">Source on GitHub</a>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
   </div>
 </footer>
+<script src="/nav.js" defer></script>
 </body>
 </html>

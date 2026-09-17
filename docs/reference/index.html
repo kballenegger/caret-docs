@@ -9,24 +9,42 @@
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+<a class="skip" href="#content">Skip to content</a>
 <header class="site">
-  <div class="wrap">
-    <img src="/assets/caret-mark.svg" alt="Caret mark">
+  <div class="bar">
+    <img src="/assets/caret-mark.svg" alt="">
     <span class="name"><a href="/">Caret Docs</a></span>
-    <nav>
-      <a href="/">Overview</a>
-      <a href="/hosted/">Hosted API</a>
-      <a href="/protocol/">Protocol</a>
-      <a href="/reference/" aria-current="page">Reference</a>
-      <a href="/migration/">Migration</a>
-      <a href="/cleanup/">Cleanup</a>
-      <a href="/imagine-references/">Imagine</a>
-      <a href="/legacy/">Legacy</a>
-    </nav>
+    <button class="menu" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <a class="home" href="https://typewithcaret.com">typewithcaret.com &rarr;</a>
   </div>
 </header>
 
-<main class="wrap">
+<div class="layout">
+<aside class="sidebar" id="site-nav">
+  <nav aria-label="Documentation">
+    <div class="group"><span>Start</span>
+      <ul>
+        <li><a href="/">Overview</a></li>
+      </ul>
+    </div>
+    <div class="group"><span>Hosted Caret API</span>
+      <ul>
+        <li><a href="/hosted/">Hosted API<small>api.typewithcaret.com</small></a></li>
+      </ul>
+    </div>
+    <div class="group"><span>Open caret/v4 protocol</span>
+      <ul>
+        <li><a href="/protocol/">Protocol<small>the normative contract</small></a></li>
+        <li><a href="/reference/" aria-current="page">Reference<small>Go and Python backends</small></a></li>
+        <li><a href="/migration/">Migration<small>from caret/v2 and v3</small></a></li>
+        <li><a href="/cleanup/">Cleanup spec<small>caret-cleanup/1</small></a></li>
+        <li><a href="/imagine-references/">Imagine references</a></li>
+      </ul>
+    </div>
+  </nav>
+</aside>
+
+<main class="wrap" id="content" tabindex="-1">
   <p class="kicker">caret/v4 · reference implementation</p>
   <h1>The public reference backend.</h1>
   <p class="lead">
@@ -218,16 +236,16 @@ python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure
     first: in-memory state only, no rate limiting, no clustering.
   </p>
 </main>
+</div>
 
 <footer class="site">
   <div class="wrap">
-    <span>Caret — the agentic iOS keyboard.</span>
-    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
+    <span>Caret, the agentic iOS keyboard.</span>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
-    <a href="/">Overview</a>
-    <a href="/protocol/">Protocol</a>
-    <a href="/migration/">Migration</a>
+    <a href="https://github.com/kballenegger/caret-docs">Source on GitHub</a>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
   </div>
 </footer>
+<script src="/nav.js" defer></script>
 </body>
 </html>

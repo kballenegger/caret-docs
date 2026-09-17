@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>[Archived] Connect your agent — the Caret reference backend</title>
+<meta name="description" content="Connect an agent you already run — Claude Code, Codex, Hermes, OpenClaw, or a hosted agent — to the Caret keyboard with one unified reference backend: pluggable Ask adapters, local OpenWhisper dictation by default, honest capability routing, per-agent runbooks.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <img src="/assets/caret-mark.svg" alt="Caret mark">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/protocol/">Protocol</a>
+      <a href="/legacy/" aria-current="page">Legacy archive</a>
+      <a href="https://typewithcaret.com">typewithcaret.com</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="note">
+    <strong>ARCHIVED — pre-V4 documentation.</strong>
+    <p style="margin:0.4rem 0 0">
+      This page describes the retired <code>caret/v2</code> / <code>caret/v3</code>
+      interfaces and is preserved for operators who still run one. The active
+      contract is <a href="/protocol/">caret/v4</a> — do not build new
+      integrations from this page. Archive index: <a href="/legacy/">/legacy/</a>.
+    </p>
+  </div>
+
+  <div class="note">
+    <p style="margin:0">point your coding agent to
+      <a href="/legacy/agent-prompts/connect-caret.md">the connect prompt</a> and it
+      downloads, configures, validates, and deploys the backend for you</p>
+  </div>
+
+  <p class="kicker">Connect your agent · the primary path</p>
+  <h1>The agent you already run, behind your keyboard.</h1>
+  <p class="lead">
+    If you already run an agent — on your Mac, on a VPS, or hosted somewhere —
+    the <strong>Caret reference backend</strong> puts it behind your keyboard.
+    One unified backend, a config switch per capability: local OpenWhisper
+    takes dictation — the one capability every Caret backend must serve —
+    your agent answers Ask, and nothing sits in the middle of your typing.
+  </p>
+
+  <p>
+    To be precise about what this is: Caret does not integrate with any agent
+    directly. Caret talks to <em>one HTTP contract</em>
+    (<a href="/legacy/your-agent/">caret/v2</a>), and the reference backend is the
+    canonical public implementation of it, with a pluggable adapter per
+    capability. Its source of truth is the public
+    <a href="https://github.com/kballenegger/caret-docs">kballenegger/caret-docs</a>
+    repository, where you can read it, its tests, and its
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/reference-backend/README.md">docs</a>.
+    The tables below say honestly, per runtime, how far support has been
+    verified.
+  </p>
+
+  <div class="card">
+    <h3>The backend in one minute<span class="pill">stdlib python</span></h3>
+    <p>
+      Standard-library Python you can read end to end
+      (<a href="https://github.com/kballenegger/caret-docs/tree/main/reference-backend">browse
+      the source on GitHub</a>). Clone it, pick your agent, generate a key:
+    </p>
+    <pre><code>git clone https://github.com/kballenegger/caret-docs.git
+cd caret-docs/reference-backend
+
+export CARET_AGENT=claude-code              # hermes | codex | grokbot | openclaw | custom-http | off
+python3 -c 'import secrets;print(secrets.token_urlsafe(32))'  # generate a key — copy the output
+export CARET_API_KEYS=paste-the-key-here                      # this goes into the Caret app
+
+python3 -m caret_backend --check            # validate configuration and readiness
+python3 -m caret_backend --port 8787        # run</code></pre>
+    <p>
+      <code>--check</code> is a readiness gate, not a formality: it fails if
+      no STT adapter resolved, because dictation is
+      <a href="#stt">mandatory</a>. Then put TLS in front
+      (<a href="#host-modes">below</a>) and either paste the URL and key into
+      Caret's settings or <a href="#qr">scan the connection QR</a>.
+    </p>
+  </div>
+
+  <h2>Compatibility matrix</h2>
+  <p>Three labels, used strictly:</p>
+  <ul>
+    <li><strong>Tested</strong> — the preset was run end to end against a real
+        install of the runtime: a live draft came back through the backend.</li>
+    <li><strong>Backend-supported</strong> — the backend's side of the boundary
+        is fully covered by the hermetic test suite, and the preset uses only
+        the runtime's stock documented syntax — but the suite does not execute
+        the real runtime.</li>
+    <li><strong>Not yet verified</strong> — no stable interface could be
+        checked, so the backend ships no default and refuses the preset until
+        you configure it explicitly. Not a support claim.</li>
+  </ul>
+  <table>
+    <tr><th>Agent</th><th>Switch</th><th>Default interface</th><th>Status</th><th>Native packaging</th></tr>
+    <tr>
+      <td><a href="/legacy/connect/claude-code/">Claude Code</a></td>
+      <td><code>claude-code</code></td>
+      <td><code>claude -p</code>, read-only plan mode, no session persistence</td>
+      <td><strong>Tested</strong></td>
+      <td>Plugin: <code>claude plugin marketplace add kballenegger/caret-docs</code></td>
+    </tr>
+    <tr>
+      <td><a href="/legacy/connect/codex/">Codex</a></td>
+      <td><code>codex</code></td>
+      <td><code>codex exec</code>, read-only sandbox, ephemeral session</td>
+      <td><strong>Tested</strong></td>
+      <td>— (no documented plugin-authoring path)</td>
+    </tr>
+    <tr>
+      <td><a href="/legacy/connect/hermes/">Hermes</a></td>
+      <td><code>hermes</code></td>
+      <td><code>hermes chat -q … -Q</code>, stock non-interactive mode</td>
+      <td><strong>Backend-supported</strong></td>
+      <td>Skill: <code>hermes skills install &lt;raw SKILL.md URL&gt;</code></td>
+    </tr>
+    <tr>
+      <td><a href="/legacy/connect/grokbot/">GrokBot</a></td>
+      <td><code>grokbot</code></td>
+      <td>one HTTPS endpoint, <code>{"task","prompt"}</code> —
+          <code>ask</code>, <code>cleanup</code> and (opt-in)
+          <code>imagine</code> from GrokBot's own model</td>
+      <td><strong>Backend-supported</strong></td>
+      <td>Agent prompt: <a href="/legacy/agent-prompts/connect-grok.md">connect-grok.md</a></td>
+    </tr>
+    <tr>
+      <td><a href="/legacy/connect/custom-http/">Custom / hosted (generic)</a></td>
+      <td><code>custom-http</code></td>
+      <td>one HTTPS <code>POST {"prompt"} → {"text"}</code> per draft</td>
+      <td><strong>Backend-supported</strong></td>
+      <td>— (nothing to install into)</td>
+    </tr>
+    <tr>
+      <td><a href="/legacy/connect/openclaw/">OpenClaw</a></td>
+      <td><code>openclaw</code></td>
+      <td><em>none shipped</em> — you supply the command line</td>
+      <td><strong>Not yet verified</strong></td>
+      <td>— (nothing verified)</td>
+    </tr>
+  </table>
+  <p>
+    Every runbook covers a local Mac and a VPS / hosted box separately, and
+    repeats its own status label so a page copied out of context stays
+    honest. The evidence behind the packaging column is in
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/integrations/README.md">the
+    plugin decision matrix</a>.
+  </p>
+
+  <h2 id="stt">Capabilities are routed, not assumed</h2>
+  <p>
+    The backend serves four surfaces, and each one routes to whatever
+    actually provides it — never to a hope. One of the four is not optional:
+  </p>
+  <div class="note">
+    <strong>Dictate is mandatory. Ask and Imagine are not.</strong>
+    <p style="margin:0.4rem 0 0">
+      A valid <code>caret/v2</code> backend takes speech. It must advertise
+      <code>"dictate": true</code>; a backend with no working STT adapter
+      is <em>not</em> a Caret backend and must never present itself as one.
+      Ask and Imagine are each optional and are reported honestly off when
+      nothing provides them. So a dictate-only backend
+      (<code>CARET_AGENT=off</code>) is complete and valid — and a backend
+      with a brilliant agent and no STT is not.
+    </p>
+  </div>
+  <table>
+    <tr><th>Operation</th><th>Required?</th><th>Route</th></tr>
+    <tr>
+      <td><strong>Dictate / STT</strong></td>
+      <td><strong>Required</strong></td>
+      <td>Through the agent <em>only</em> if its adapter verifiably
+          transcribes audio. <strong>No shipped preset does</strong> — Claude
+          Code and Codex are text-only non-interactive CLIs, Hermes and
+          OpenClaw expose no documented stable transcription contract,
+          GrokBot exposes no verified non-interactive transcription
+          interface, and the custom-http contract is text-JSON by
+          definition. So speech is transcribed by the backend's own STT
+          adapter — local
+          <a href="https://github.com/openai/whisper">OpenWhisper</a> by
+          default when installed, a hosted STT service via
+          <code>CARET_STT_HTTP_URL</code>, or any command via
+          <code>CARET_STT_COMMAND</code> — and only then does text reach the
+          agent. <strong>No STT resolved is a hard stop:</strong> health
+          reports <code>"status": "not_ready"</code> with the
+          <code>no_stt_adapter</code> blocker,
+          <code>python3 -m caret_backend --check</code> exits non-zero, and
+          the connection QR refuses to generate.</td>
+    </tr>
+    <tr>
+      <td><strong>Ask</strong></td>
+      <td>Optional</td>
+      <td>Your selected agent, when you configure one. With
+          <code>CARET_AGENT=off</code> — or <code>auto</code> with nothing
+          installed — health reports <code>"ask": false</code> and
+          <code>/v2/ask</code> answers <code>404 not_found</code> rather
+          than faking a reply. That is a valid backend, not a broken
+          one.</td>
+    </tr>
+    <tr>
+      <td><strong>Transcript cleanup</strong></td>
+      <td>Optional</td>
+      <td>Your selected agent, as a constrained text-only cleanup request —
+          format the transcript, do not answer it, take no action. The
+          wording is the published
+          <a href="/cleanup/"><code>caret-cleanup/1</code></a> spec, the same
+          for every preset: the transcript arrives as inert data, meaning is
+          preserved, only formatting changes. The CLI presets also run in
+          their read-only modes, so "no action tools" is enforced where the
+          runtime can enforce it. With no agent, cleanup is off and Dictate
+          returns the raw transcript — as it does whenever a cleanup call
+          fails.</td>
+    </tr>
+    <tr>
+      <td><strong>Imagine</strong></td>
+      <td>Optional</td>
+      <td>Through the agent <em>only</em> if its adapter verifiably renders
+          images. Exactly one shipped preset does:
+          <a href="/legacy/connect/grokbot/"><code>grokbot</code></a> with
+          <code>CARET_GROKBOT_IMAGE=on</code>, which serves Imagine from
+          GrokBot's own image capability. Every other preset has no verified
+          image-output interface, so Imagine uses the image provider you
+          configure (<code>CARET_IMAGE_COMMAND</code>) and stays honestly off
+          otherwise.</td>
+    </tr>
+  </table>
+  <p>
+    <code>GET /v2/health</code> reports the resolved route per operation in
+    its <code>routes</code> block and the pass/fail verdict in its
+    <code>readiness</code> block, so what the keyboard offers always matches
+    what the backend can actually do:
+  </p>
+  <pre><code>{"status": "not_ready",
+ "capabilities": {"dictate": false, "ask": true, "imagine": false},
+ "readiness": {"ready": false,
+               "blockers": [{"code": "no_stt_adapter", "message": "…"}]}}</code></pre>
+  <p>
+    That shape — Ask on, Dictate off — is the one configuration this contract
+    does not accept. It is shown here only so you recognise it as a failure.
+  </p>
+
+  <h2 id="host-modes">Where the backend runs, and how Caret reaches it</h2>
+  <p>
+    The backend binds loopback and speaks plain HTTP; the keyboard requires
+    <code>https://</code>. So every deployment is the same shape — backend on
+    the machine where your agent lives, TLS in front — and the choice is only
+    <em>what provides the TLS</em>.
+  </p>
+  <table>
+    <tr><th>Mode</th><th>How</th><th>Trade-off</th></tr>
+    <tr>
+      <td><strong>Local Mac, tailnet</strong></td>
+      <td><code>tailscale serve --bg 8787</code> gives the backend a private
+          <code>https://your-mac.your-tailnet.ts.net</code> URL. Your iPhone
+          joins the same tailnet.</td>
+      <td>Recommended default. Nothing is exposed to the public internet; TLS
+          certificates are handled for you; works away from home. Requires
+          Tailscale on phone and Mac.</td>
+    </tr>
+    <tr>
+      <td><strong>Private VPS / hosted box, tailnet</strong></td>
+      <td>Same as above, on the box where your agent runs.</td>
+      <td>Same properties; the box needs no open ports at all.</td>
+    </tr>
+    <tr>
+      <td><strong>VPS, public HTTPS</strong></td>
+      <td>A reverse proxy (Caddy shown in the runbooks) terminates TLS with an
+          automatic Let's Encrypt certificate and forwards to
+          <code>127.0.0.1:8787</code>.</td>
+      <td>Works from any network with no client software — but the endpoint is
+          publicly reachable, so the bearer key and the proxy are your entire
+          perimeter. Use a dedicated subdomain and keep the backend itself on
+          loopback.</td>
+    </tr>
+  </table>
+  <div class="note">
+    <strong>Not recommended</strong>
+    <p style="margin:0.4rem 0 0">
+      Port-forwarding your home router at the backend, or binding it to
+      <code>0.0.0.0</code> without a proxy. The backend fronts an agent with an
+      API key as the only lock; keep it off the open internet unless a proxy
+      and a dedicated host are in front of it.
+    </p>
+  </div>
+
+  <h2 id="pairing">Pairing and the key model</h2>
+  <p>
+    Pairing is deliberately boring: a base URL and a bearer key, both entered
+    once in Caret's settings — or scanned once, as a QR.
+  </p>
+  <ol>
+    <li><strong>Generate a key on the machine that runs the backend</strong> —
+        <code>python3 -c 'import secrets;print(secrets.token_urlsafe(32))'</code>.
+        Put it in <code>CARET_API_KEYS</code>. One key per device makes
+        revocation a matter of deleting one string and restarting.</li>
+    <li><strong>Enter URL and key in Caret</strong> — by hand, or by scanning
+        the connection QR below. The app calls
+        <code>GET /v2/health</code> — the only anonymous endpoint — and shows
+        you what it found: <code>auth.valid</code> tells "wrong key" apart
+        from "wrong URL", and <code>capabilities</code> tells the keyboard
+        exactly which operations this backend serves, so it never offers what
+        the backend cannot do.</li>
+    <li><strong>Every other request is authenticated</strong> with
+        <code>Authorization: Bearer</code>, compared in constant time. No keys
+        configured means the backend <em>fails closed</em>: every request is
+        401 and health reports <code>degraded</code>.</li>
+  </ol>
+
+  <h2 id="qr">The connection QR — <code>caret-connect:v1</code></h2>
+  <p>
+    Typing a 43-character key into a phone is where most setups go wrong. So
+    once the backend is configured <em>and ready</em>, it will render that
+    same URL-and-key pair as a QR the Caret app scans:
+  </p>
+  <pre><code>python3 -m caret_backend --qr --url https://your-mac.your-tailnet.ts.net</code></pre>
+  <p>
+    It prints the symbol in the terminal, plus a masked fingerprint of the
+    payload — never the payload itself. Add
+    <code>--save ~/caret-connect.png</code> to write a PNG instead (mode
+    <code>0600</code>), and <code>--no-display</code> to skip the terminal
+    render entirely.
+  </p>
+
+  <div class="note">
+    <strong>The QR <em>is</em> the credential.</strong>
+    <p style="margin:0.4rem 0 0">
+      It carries your API key, not a pointer to one. Anyone who scans it —
+      or photographs it over your shoulder, or finds it in a screen recording
+      — can use your backend until you rotate the key. So generation is
+      opt-in and explicit (never a side effect of starting the server), the
+      payload is never logged or printed in full, and a saved PNG is written
+      owner-only. Treat it exactly as you would the key: show it to one
+      phone, then delete the file. To revoke, change
+      <code>CARET_API_KEYS</code> and restart — every QR ever generated dies
+      with the old key.
+    </p>
+  </div>
+
+  <h3>The wire format</h3>
+  <p>
+    A compact JSON object, base64url-encoded without padding, behind a
+    version prefix. Keys are sorted so two implementations produce the same
+    bytes:
+  </p>
+  <table>
+    <tr><th>Field</th><th>Meaning</th></tr>
+    <tr><td><code>t</code></td>
+        <td>Type. <code>"agent"</code> for a backend you run — the case here.
+            (<code>"hosted"</code> exists for Caret's own service and must
+            <em>not</em> carry a <code>u</code>: the client pins its own
+            canonical URL, so a hosted code naming a URL is an attempt to aim
+            a phone somewhere else, and is refused.)</td></tr>
+    <tr><td><code>u</code></td>
+        <td>The backend's base URL, no trailing slash. Required for
+            <code>agent</code>. <code>https://</code> everywhere except
+            loopback, RFC-1918 addresses and <code>*.ts.net</code>, where
+            plaintext is allowed because the transport is already
+            private.</td></tr>
+    <tr><td><code>k</code></td>
+        <td>The API key, 10–300 characters, exactly as it appears in
+            <code>CARET_API_KEYS</code>.</td></tr>
+  </table>
+  <p>Worked example, pinned byte-for-byte on both sides — the key is fake:</p>
+  <pre><code>{"k":"caret_demo_key_1234567890","t":"agent","u":"https://agent.example.com"}
+
+caret-connect:v1:eyJrIjoiY2FyZXRfZGVtb19rZXlfMTIzNDU2Nzg5MCIsInQiOiJhZ2Vu
+dCIsInUiOiJodHRwczovL2FnZW50LmV4YW1wbGUuY29tIn0</code></pre>
+  <p>
+    And the encoding as one shell line, if you would rather build the payload
+    yourself. It reads the key from the environment so the key never lands in
+    your shell history, and <code>umask 077</code> plus a redirect keep the
+    result off the terminal — <strong>its output is the credential</strong>:
+  </p>
+  <pre><code>( umask 077; python3 -c 'import base64,json,os,sys;d={"k":os.environ["CARET_API_KEYS"].split(",")[0],"t":"agent","u":sys.argv[1].rstrip("/")};print("caret-connect:v1:"+base64.urlsafe_b64encode(json.dumps(d,separators=(",",":"),sort_keys=True).encode()).decode().rstrip("="))' https://your-mac.your-tailnet.ts.net > ~/caret-connect.txt )</code></pre>
+
+  <h3>Readiness gates the QR</h3>
+  <p>
+    <code>--qr</code> refuses while any readiness blocker stands. Handing a
+    phone a code that connects to a backend with no microphone produces a
+    keyboard that silently lacks its main feature and no explanation of why,
+    so the CLI stops and names the blocker instead. <code>--force</code>
+    exists for debugging and says so.
+  </p>
+
+  <h3>Pairing tokens — an optional server extension</h3>
+  <p>
+    The reference backend also implements short-lived, single-use pairing
+    tokens (<code>/v2/pairing/tokens</code>, <code>/v2/pairing/claim</code>,
+    <code>/v2/pairing/revoke</code>, and
+    <code>python3 -m caret_backend --pair</code>): a five-minute secret bound
+    to one server URL, exchanged over TLS for the durable key. <strong>The
+    Caret app does not use this</strong> — it configures itself from a
+    <code>caret-connect:v1</code> code. The token flow is here for your own
+    clients, shared machines, and any case where handing over a durable key
+    as pixels is the wrong trade. It is documented in
+    <a href="/legacy/openapi.yaml">openapi.yaml</a> and is not part of the
+    <code>caret/v2</code> client contract.
+  </p>
+
+  <h2>Security model</h2>
+  <p>What the backend promises, and what stays your responsibility:</p>
+  <ul>
+    <li><strong>It never widens your agent's permissions.</strong> The CLI
+        presets use each runtime's documented non-interactive,
+        most-restricted mode — Claude Code in read-only plan mode, Codex in a
+        read-only sandbox. The backend refuses to start if a configured
+        command contains a known permission-bypass flag
+        (<code>--dangerously-skip-permissions</code>,
+        <code>danger-full-access</code>, …). It never enables tool actions,
+        arbitrary shell execution, or background work on the agent's side.</li>
+    <li><strong>A prompt is not a sandbox.</strong> The drafting and
+        <a href="/cleanup/">cleanup</a> prompts tell the agent it is writing
+        text, not acting, and cleanup goes further by delivering the
+        transcript as inert data inside a <code>&lt;transcript&gt;</code>
+        envelope — but for runtimes whose restriction flags are advisory
+        (Hermes toolsets follow <em>your</em> profile), the runbook shows the
+        documented way to narrow them, and recommends running the backend as
+        a dedicated low-privilege user with its own agent profile. That
+        recommendation is the default posture, not an extra.</li>
+    <li><strong>Audio stays local by default.</strong> The default STT is
+        OpenWhisper on the machine running the backend: recordings never
+        leave it, and chunks are deleted as soon as a session produces its
+        result. Configure a hosted STT and that trade-off is yours,
+        explicitly.</li>
+    <li><strong>No secret or content logging.</strong> Access logs carry
+        method, path, status and <code>request_id</code> — never
+        instructions, drafts, transcripts, near-cursor text, or keys. This is
+        asserted by the test suite, not just promised.</li>
+    <li><strong>What your agent sees per draft:</strong> the instruction you
+        typed (or the local transcript of what you said), up to 4000
+        characters of text near the cursor (<code>visible_text</code>, often
+        empty), and the host app's bundle id as a register hint. Near-cursor
+        text is someone else's words — the framing treats it as untrusted
+        context, never as a command.</li>
+    <li><strong>Timeouts, not hangs.</strong> Every draft has a wall-clock
+        budget (90 s default); overrun is a clean
+        <code>504 ask_timeout</code>, and a failed draft is never cached —
+        retries can succeed.</li>
+  </ul>
+
+  <h2>Troubleshooting, from the outside in</h2>
+  <table>
+    <tr><th>Symptom</th><th>Meaning</th></tr>
+    <tr><td>Startup fails with <code>configuration error: …</code></td>
+        <td>The message says exactly which variable to fix.
+            <code>--check</code> reproduces it without serving.</td></tr>
+    <tr><td>Caret says it cannot reach the URL</td>
+        <td>TLS layer. <code>curl https://…/v2/health</code> from the phone's
+            network; if that fails, fix the proxy/tailnet before touching the
+            backend.</td></tr>
+    <tr><td>Health shows <code>"valid": false</code></td>
+        <td>Key mismatch between the app and
+            <code>CARET_API_KEYS</code>.</td></tr>
+    <tr><td>Health shows <code>"status": "degraded"</code></td>
+        <td>No keys configured; the backend is failing closed as designed.
+            <code>readiness.blockers</code> says <code>no_api_keys</code>.</td></tr>
+    <tr><td>Health shows <code>"status": "not_ready"</code></td>
+        <td>No STT adapter resolved, so this is not yet a valid Caret
+            backend — dictation is mandatory. Install OpenWhisper
+            (<code>brew install openai-whisper</code>) or set
+            <code>CARET_STT_COMMAND</code> / <code>CARET_STT_HTTP_URL</code>,
+            then restart. <code>readiness.blockers</code> says
+            <code>no_stt_adapter</code>.</td></tr>
+    <tr><td>No microphone in the keyboard</td>
+        <td>Same cause: no STT resolved. <code>routes.dictate</code> in
+            health says so, and the backend should not have been paired in
+            this state.</td></tr>
+    <tr><td><code>--qr</code> says <code>NOT READY — refusing to hand out a
+            connection</code></td>
+        <td>Working as designed. Clear the named readiness blocker rather
+            than reaching for <code>--force</code>.</td></tr>
+    <tr><td>Scanning the QR does nothing / the app rejects it</td>
+        <td>Check the payload starts <code>caret-connect:v1:</code> and the
+            URL in it is reachable <em>from the phone</em>. A key shorter
+            than 10 characters is refused by both sides.</td></tr>
+    <tr><td><code>503 internal_error: … exited N</code></td>
+        <td>The agent CLI failed; the stderr tail is in the message. Run the
+            runbook's smoke command by hand as the backend's user.</td></tr>
+    <tr><td><code>504 ask_timeout</code></td>
+        <td>The agent is slower than <code>CARET_AGENT_TIMEOUT_S</code>. Pin
+            a faster model in the command, or raise the budget.</td></tr>
+  </table>
+  <p>
+    Every response carries a <code>request_id</code>; the backend logs one
+    line per request with the same id, so a report from the keyboard gives
+    you a grep target.
+  </p>
+
+  <h2>Runbooks</h2>
+  <ul>
+    <li><a href="/legacy/connect/claude-code/">Claude Code</a> — tested · installable plugin</li>
+    <li><a href="/legacy/connect/codex/">Codex</a> — tested</li>
+    <li><a href="/legacy/connect/hermes/">Hermes</a> — backend-supported · installable skill</li>
+    <li><a href="/legacy/connect/grokbot/">GrokBot</a> — backend-supported · first-party, Imagine-capable</li>
+    <li><a href="/legacy/connect/custom-http/">Custom &amp; hosted agents</a> — backend-supported · generic fallback</li>
+    <li><a href="/legacy/connect/openclaw/">OpenClaw</a> — not yet verified</li>
+  </ul>
+  <p>
+    Rather implement <code>caret/v2</code> from scratch — a different
+    language, a backend you fully own? That is the advanced path:
+    <a href="/legacy/your-agent/">the implementation guide</a>.
+  </p>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="/legacy/connect/">Connect</a>
+    <a href="/legacy/your-agent/">Your Agent</a>
+  </div>
+</footer>
+</body>
+</html>

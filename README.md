@@ -72,13 +72,15 @@ a replay from becoming a second bill.
 ## Legacy: everything pre-V4
 
 `caret/v2` (REST) and `caret/v3` (the optional live-dictation WebSocket)
-are retired. Everything that documented them — the implementation guide,
-the connect runbooks, `openapi.yaml`, the V2 reference backend and its
-conformance checker, the packaged Claude Code plugin and Hermes skill,
-the agent prompts — is preserved, clearly marked, under
-[`legacy/`](legacy/README.md) in this repository and
-<https://docs.typewithcaret.com/legacy/> on the docs site. Old URLs
-redirect. Nothing in the archive applies to V4 except as history.
+are retired, and their documentation is no longer published. Everything
+that documented them — the implementation guide, the connect runbooks,
+`openapi.yaml`, the V2 reference backend and its conformance checker,
+the packaged Claude Code plugin and Hermes skill, the agent prompts — is
+preserved under [`legacy/`](legacy/README.md) in this repository. On the
+docs site every old URL, including the former `/legacy/…` copies,
+answers with a short retirement notice at
+<https://docs.typewithcaret.com/legacy/> that points at the current
+pages. Nothing in the archive applies to V4 except as history.
 
 ## Checking a change to this repository
 
@@ -91,8 +93,9 @@ make test
 That runs, in order: the public-repo guard (`scripts/public_guard.py` —
 this repository must never reference private machines, private
 repositories, or credentials), the docs structure check
-(`scripts/docs_check.py` — active pages link only to active pages,
-archived pages carry their banner, every internal link resolves), the
+(`scripts/docs_check.py` — active pages share one header and sidebar,
+link only to active pages, retired URLs hold only redirect stubs and
+retirement notices, every internal link resolves), the
 cleanup-spec digest check, the unit tests for those scripts, the V4
 reference implementations' suites (`make reference-test` on its own; the
 Go half is skipped with a notice when no Go toolchain is installed), and

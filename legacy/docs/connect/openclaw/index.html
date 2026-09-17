@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>[Archived] Connect OpenClaw to Caret</title>
+<meta name="description" content="Runbook: the Caret reference backend with OpenClaw as its Ask adapter — an explicit, operator-verified command line; no unverified defaults — on a local Mac or a VPS.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <img src="/assets/caret-mark.svg" alt="Caret mark">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/protocol/">Protocol</a>
+      <a href="/legacy/" aria-current="page">Legacy archive</a>
+      <a href="https://typewithcaret.com">typewithcaret.com</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="note">
+    <strong>ARCHIVED — pre-V4 documentation.</strong>
+    <p style="margin:0.4rem 0 0">
+      This page describes the retired <code>caret/v2</code> / <code>caret/v3</code>
+      interfaces and is preserved for operators who still run one. The active
+      contract is <a href="/protocol/">caret/v4</a> — do not build new
+      integrations from this page. Archive index: <a href="/legacy/">/legacy/</a>.
+    </p>
+  </div>
+
+  <p class="kicker">connect · openclaw</p>
+  <h1>OpenClaw behind your keyboard.</h1>
+  <p class="lead">
+    The reference backend has an <code>openclaw</code> preset, but it ships
+    no default command for it — because none could be verified, and a guessed
+    command line published as documentation would be a support claim we
+    cannot back.
+  </p>
+
+  <div class="note">
+    <strong>Status: not yet verified</strong>
+    <p style="margin:0.4rem 0 0">
+      OpenClaw was not available on the machine this backend was developed
+      and tested on, so no invocation has been checked against a real
+      install — and no plugin, STT, or image capability is claimed either.
+      Selecting <code>CARET_AGENT=openclaw</code> without an explicit command
+      is a startup error by design. Everything below is the honest path from
+      "unverified" to "works on my machine, verified" — it takes about ten
+      minutes and one model call.
+    </p>
+  </div>
+
+  <h2>What the backend needs from OpenClaw</h2>
+  <p>
+    The same thing it needs from every CLI runtime — one non-interactive
+    command that:
+  </p>
+  <ul>
+    <li>reads a prompt, either as an argument (where you write
+        <code>{prompt}</code>) or on stdin (if the template has no
+        <code>{prompt}</code>);</li>
+    <li>prints the reply — and nothing else — on stdout;</li>
+    <li>exits 0 on success, non-zero on failure.</li>
+  </ul>
+  <p>
+    If your OpenClaw install has a documented one-shot / non-interactive chat
+    mode, use it directly. If its output mixes logs with the answer, wrap it
+    in a five-line script that extracts the reply and prints only that, and
+    point the backend at the wrapper. Prefer whatever flags your install
+    documents for running <em>without</em> tools or actions — the drafting
+    call should be text-in, text-out.
+  </p>
+
+  <h2>1 · Configure with an explicit command</h2>
+  <pre><code>git clone https://github.com/kballenegger/caret-docs.git
+cd caret-docs/reference-backend
+
+export CARET_AGENT=openclaw
+# YOUR verified invocation — this example shape is illustrative, not documentation:
+export CARET_AGENT_COMMAND='openclaw-draft-wrapper {prompt}'
+python3 -c 'import secrets;print(secrets.token_urlsafe(32))'  # generate a key — copy the output
+export CARET_API_KEYS=paste-the-key-here                      # the same key goes into the Caret app
+
+python3 -m caret_backend --check</code></pre>
+  <p>
+    Substitution is argv-level — no shell ever sees the prompt. Commands
+    containing known permission-bypass flags are refused at startup.
+  </p>
+
+  <h2>2 · Verify it yourself</h2>
+  <p>First the command alone, then the chain:</p>
+  <pre><code># 1. does the command behave? (run as the backend's user)
+echo ok | openclaw-draft-wrapper "reply with exactly: ok"
+
+# 2. does the chain draft?
+python3 -m caret_backend --port 8787 &amp;
+curl -s -X POST localhost:8787/v2/ask \
+  -H "Authorization: Bearer $CARET_API_KEYS" \
+  -H 'Content-Type: application/json' \
+  -d '{"client_request_id":"smoke-1",
+       "input":{"type":"text","text":"tell Sam I am running ten minutes late"}}'</code></pre>
+  <p>
+    A clean draft here means your integration is verified — for your install,
+    which is the one that matters. If you land on a stable, stock-syntax
+    OpenClaw invocation, please open an issue on the public
+    <a href="https://github.com/kballenegger/caret-docs">caret-docs</a>
+    repository with the exact command line; verified submissions are how this
+    page's label changes.
+  </p>
+
+  <h2>Dictation — mandatory</h2>
+  <p>
+    STT does not go through OpenClaw — even if your install has voice
+    features, no stable transcription contract could be verified, so nothing
+    is routed through it. Dictation uses the backend's own STT lane: local
+    <a href="https://github.com/openai/whisper">OpenWhisper</a> by default
+    when installed, or the adapter you configure. See
+    <a href="/legacy/connect/#stt">the STT section of the Connect overview</a>.
+  </p>
+  <p>
+    And it is required. With no STT adapter resolved, health reports
+    <code>"status": "not_ready"</code> with the <code>no_stt_adapter</code>
+    blocker, <code>--check</code> exits non-zero, and the connection QR
+    refuses to generate.
+  </p>
+  <p>
+    Note the order this implies: an unverified Ask preset is a valid,
+    optional gap, but no STT adapter is not. A backend here can legitimately
+    ship with Ask off — it cannot ship with dictation off.
+  </p>
+
+  <h2>3 · Host modes</h2>
+  <p>
+    Identical to every other backend once the command works.
+    <strong>Local Mac:</strong> <code>tailscale serve --bg 8787</code> for a
+    private tailnet HTTPS URL. <strong>VPS / hosted box:</strong> the same
+    tailnet command, or public HTTPS via a Caddy site block
+    (<code>reverse_proxy 127.0.0.1:8787</code>) with the backend kept on
+    loopback and run as a dedicated low-privilege user with a minimal
+    OpenClaw profile. Details and trade-offs:
+    <a href="/legacy/connect/#host-modes">the Connect overview</a>.
+  </p>
+
+  <h2>4 · Pair with Caret</h2>
+  <p>Scan a code, or type two strings. The scan is one command:</p>
+  <pre><code>python3 -m caret_backend --qr --url https://your-backend.example</code></pre>
+  <p>
+    That prints a <code>caret-connect:v1</code> symbol carrying the base URL
+    and the key; <code>--save ~/caret-connect.png</code> writes an owner-only
+    PNG instead. It refuses while any readiness blocker stands.
+    <strong>The code <em>is</em> the credential</strong> — anyone who scans it
+    can use this backend until you rotate <code>CARET_API_KEYS</code>. Format
+    and warnings: <a href="/legacy/connect/#qr">the connection QR</a>.
+  </p>
+  <p>Or by hand:</p>
+  <p>
+    URL + key in Caret settings; the health check shows
+    <code>"agent": "openclaw"</code> in the adapters block and reports what
+    actually resolved per surface in <code>routes</code>.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <table>
+    <tr><th>Symptom</th><th>Fix</th></tr>
+    <tr><td><code>configuration error: the openclaw preset is not yet verified…</code></td>
+        <td>Working as intended — set <code>CARET_AGENT_COMMAND</code> to
+            your verified invocation.</td></tr>
+    <tr><td><code>503 internal_error: openclaw exited N: …</code></td>
+        <td>The command failed; its stderr tail is in the message. Re-run it
+            by hand as the backend's user.</td></tr>
+    <tr><td>Drafts contain log lines or banners</td>
+        <td>Your command's stdout is not answer-only — add the quiet flag
+            your install documents, or wrap and filter.</td></tr>
+    <tr><td><code>503 internal_error: openclaw returned an empty answer</code></td>
+        <td>The command printed nothing — usually a wrapper writing to the
+            wrong stream.</td></tr>
+  </table>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="/legacy/connect/">Connect</a>
+    <a href="/legacy/your-agent/">Your Agent</a>
+  </div>
+</footer>
+</body>
+</html>

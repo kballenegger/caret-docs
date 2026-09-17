@@ -20,27 +20,19 @@ help:
 	@echo "make spec   regenerate the derived cleanup-spec files in spec/cleanup/v1/"
 	@echo "make reference-test  just the V4 reference implementations (Go + Python)"
 
-# The extra copies below (openapi.yaml, agent-prompts/, integrations/)
-# keep pre-V4 deep links resolving at their old URLs; every copied file
-# is banner-marked as archived. scripts/docs_check.py mirrors this
-# layout in EXTRA_SITE_FILES — change both together.
+# docs/ is the whole published tree. Retired pre-V4 paths (the old
+# /legacy/ pages, openapi.yaml, agent-prompts/, integrations/) exist in
+# docs/ only as redirect stubs and short retirement notices; the archived
+# material itself lives under legacy/ and is not published.
+# scripts/docs_check.py mirrors this layout in EXTRA_SITE_FILES — change
+# both together.
 site:
 	rm -rf _site
-	mkdir -p _site/spec/cleanup/v1 \
-	         _site/agent-prompts \
-	         _site/integrations/hermes/caret-connect \
-	         _site/legacy/agent-prompts \
-	         _site/legacy/integrations/hermes/caret-connect
+	mkdir -p _site/spec/cleanup/v1
 	cp -R docs/. _site/
 	cp spec/cleanup/v1/* _site/spec/cleanup/v1/
-	cp legacy/openapi.yaml _site/legacy/openapi.yaml
-	cp legacy/openapi.yaml _site/openapi.yaml
-	cp legacy/agent-prompts/*.md _site/legacy/agent-prompts/
-	cp legacy/agent-prompts/*.md _site/agent-prompts/
-	cp legacy/integrations/hermes/caret-connect/SKILL.md _site/legacy/integrations/hermes/caret-connect/SKILL.md
-	cp legacy/integrations/hermes/caret-connect/SKILL.md _site/integrations/hermes/caret-connect/SKILL.md
 	$(PYTHON) scripts/public_guard.py
-	$(PYTHON) scripts/docs_check.py
+	$(PYTHON) scripts/docs_check.py --site _site
 
 guard:
 	$(PYTHON) scripts/public_guard.py

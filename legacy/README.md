@@ -22,9 +22,11 @@ What is archived here:
 | [`claude-plugin/`](claude-plugin/) | The repo-root Claude Code marketplace manifest for the plugin above. Moved here so `claude plugin marketplace add` no longer offers a retired integration. |
 
 The archived docs pages (`connect/`, `your-agent/`, `live-dictation/`)
-live under [`../docs/legacy/`](../docs/legacy/) and stay published at
-`https://docs.typewithcaret.com/legacy/…` with an archive banner; the
-old URLs redirect there.
+live under [`docs/`](docs/) in this directory. They are no longer
+published: every old URL on docs.typewithcaret.com, including the
+former `/legacy/…` copies, `/openapi.yaml`, `/agent-prompts/` and the
+Hermes skill path, now answers with a short retirement notice that
+points here and at the current documentation.
 
 History is intact: every file was moved with `git mv`, so
 `git log --follow` works from either path.

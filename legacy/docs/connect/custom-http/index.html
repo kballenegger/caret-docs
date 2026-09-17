@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>[Archived] Connect a hosted agent to Caret (custom HTTP)</title>
+<meta name="description" content="Runbook: the Caret reference backend with any hosted agent as its optional Ask adapter — one JSON POST per draft — plus the backend's own mandatory STT lane for dictation.">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <img src="/assets/caret-mark.svg" alt="Caret mark">
+    <span class="name"><a href="/">Caret Docs</a></span>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/protocol/">Protocol</a>
+      <a href="/legacy/" aria-current="page">Legacy archive</a>
+      <a href="https://typewithcaret.com">typewithcaret.com</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="note">
+    <strong>ARCHIVED — pre-V4 documentation.</strong>
+    <p style="margin:0.4rem 0 0">
+      This page describes the retired <code>caret/v2</code> / <code>caret/v3</code>
+      interfaces and is preserved for operators who still run one. The active
+      contract is <a href="/protocol/">caret/v4</a> — do not build new
+      integrations from this page. Archive index: <a href="/legacy/">/legacy/</a>.
+    </p>
+  </div>
+
+  <p class="kicker">connect · custom-http</p>
+  <h1>A hosted agent behind your keyboard.</h1>
+  <p class="lead">
+    The generic fallback, for agents that are neither a local CLI nor one of
+    the named presets: a service on a box you rent, an internal bot, anything
+    you can put one HTTP endpoint in front of. The reference backend forwards
+    each draft as a single JSON POST.
+  </p>
+
+  <div class="note">
+    <strong>Looking for GrokBot?</strong>
+    <p style="margin:0.4rem 0 0">
+      GrokBot is a first-party backend with its own preset and its own
+      runbook — <a href="/legacy/connect/grokbot/">connect/grokbot/</a> — not a
+      <code>custom-http</code> deployment. It serves Ask <em>and</em> Imagine
+      from its own model. Use this page only when no named preset fits.
+    </p>
+  </div>
+
+  <div class="note">
+    <strong>Status: backend-supported</strong>
+    <p style="margin:0.4rem 0 0">
+      The backend's side of this contract — request shape, auth header, error
+      mapping for unreachable/failing/malformed upstreams — is fully covered
+      by the hermetic test suite. Your upstream is yours: this page defines
+      exactly what it must do, and the smoke test in step 3 is the
+      verification. No claim is made about any particular hosted agent
+      product — and the contract is text-JSON by definition, so neither STT
+      nor image generation routes through it.
+    </p>
+  </div>
+
+  <h2>The contract your endpoint implements</h2>
+  <p>One request per draft. Deliberately as small as a contract can be:</p>
+  <pre><code>POST &lt;CARET_AGENT_HTTP_URL&gt;
+Content-Type: application/json
+Authorization: Bearer &lt;CARET_AGENT_HTTP_BEARER&gt;     // only if you set one
+
+{"prompt": "&lt;the framed drafting prompt&gt;"}
+
+→ 200
+{"text": "&lt;the finished draft&gt;"}</code></pre>
+  <table>
+    <tr><th>Your endpoint does</th><th>The backend answers Caret</th></tr>
+    <tr><td>200 with a non-empty string <code>text</code></td>
+        <td>the draft, as normal</td></tr>
+    <tr><td>Any non-200</td>
+        <td><code>503 internal_error</code>, retryable</td></tr>
+    <tr><td>Non-JSON body, or JSON without <code>text</code></td>
+        <td><code>503 internal_error</code>, retryable</td></tr>
+    <tr><td>Unreachable / times out</td>
+        <td><code>503 internal_error</code> / <code>504 ask_timeout</code>,
+            retryable</td></tr>
+  </table>
+  <p>
+    The prompt arrives fully framed — instruction, optional near-cursor text,
+    optional app hint, and the read-only "this is a draft, take no action"
+    instruction. Transcript cleanup arrives through the same endpoint as a
+    constrained text-only cleanup prompt. Your endpoint sends it to your
+    agent and returns the reply. A five-line handler in any web framework is
+    a complete implementation.
+  </p>
+
+  <h2>1 · Stand up the endpoint next to your agent</h2>
+  <p>
+    Wherever the agent lives — your VPS, a PaaS, a box on your LAN — add one
+    route that receives <code>{"prompt"}</code>, calls the agent
+    <em>text-in, text-out</em>, and returns <code>{"text"}</code>. Keep it as
+    dumb as possible:
+  </p>
+  <ul>
+    <li>Do not give the route tool access, memory writes, or side effects —
+        it is a drafting call, and the prompt says so.</li>
+    <li>Require the bearer token if the endpoint is reachable beyond
+        loopback.</li>
+    <li>Do not log the prompt or the reply; log a request id and a status,
+        the way the backend does.</li>
+  </ul>
+
+  <h2>2 · Configure the backend</h2>
+  <p>
+    Run the backend wherever you like — same box as the endpoint (then the
+    URL is loopback and needs no TLS of its own) or your Mac pointing at the
+    hosted endpoint over HTTPS:
+  </p>
+  <pre><code>git clone https://github.com/kballenegger/caret-docs.git
+cd caret-docs/reference-backend
+
+export CARET_AGENT=custom-http
+export CARET_AGENT_HTTP_URL='https://agent.yourdomain.com/caret-draft'
+export CARET_AGENT_HTTP_BEARER='…'           # whatever your endpoint checks
+python3 -c 'import secrets;print(secrets.token_urlsafe(32))'  # generate a key — copy the output
+export CARET_API_KEYS=paste-the-key-here                      # paste this into Caret later
+
+python3 -m caret_backend --check
+python3 -m caret_backend --port 8787</code></pre>
+  <p>
+    Two keys, two directions, on purpose: <code>CARET_API_KEYS</code>
+    is what <em>Caret</em> presents to the backend;
+    <code>CARET_AGENT_HTTP_BEARER</code> is what the <em>backend</em>
+    presents to your endpoint. Neither is ever logged.
+  </p>
+
+  <h2>Dictation — mandatory, and not through this endpoint</h2>
+  <p>
+    STT never goes through the drafting endpoint — its contract is text-only.
+    Dictation uses the backend's own STT lane: local
+    <a href="https://github.com/openai/whisper">OpenWhisper</a> by default
+    when installed on the machine running the backend, a hosted STT service
+    via <code>CARET_STT_HTTP_URL</code> (one WAV POST →
+    <code>{"text"}</code>), or any command via <code>CARET_STT_COMMAND</code>.
+    See <a href="/legacy/connect/#stt">the STT section of the Connect overview</a>.
+  </p>
+  <p>
+    Dictation is <strong>required</strong>: a backend with no working STT
+    adapter reports <code>"status": "not_ready"</code> with the
+    <code>no_stt_adapter</code> blocker, <code>--check</code> fails, and the
+    connection QR refuses to generate. A hosted Ask endpoint with no STT is
+    not a valid Caret backend, however well the drafts read.
+  </p>
+
+  <h2>3 · Smoke-test the whole chain</h2>
+  <pre><code>curl -s localhost:8787/v2/health | python3 -m json.tool
+curl -s -X POST localhost:8787/v2/ask \
+  -H "Authorization: Bearer $CARET_API_KEYS" \
+  -H 'Content-Type: application/json' \
+  -d '{"client_request_id":"smoke-1",
+       "input":{"type":"text","text":"tell Sam I am running ten minutes late"}}'</code></pre>
+  <p>
+    A draft here proves backend → endpoint → agent → back. This is the step
+    that verifies <em>your</em> integration. Health's <code>routes</code>
+    block shows how every surface resolved.
+  </p>
+
+  <h2>4 · Host modes and pairing</h2>
+  <p>
+    <strong>Backend on the hosted box:</strong> bind loopback, put the box's
+    TLS in front — <code>tailscale serve --bg 8787</code> for a tailnet-only
+    URL, or a Caddy site block (<code>reverse_proxy 127.0.0.1:8787</code>)
+    for public HTTPS. <strong>Backend on your Mac:</strong> point
+    <code>CARET_AGENT_HTTP_URL</code> at the hosted endpoint over HTTPS and
+    expose the backend to your phone with
+    <code>tailscale serve --bg 8787</code>. Then pair as always: URL + key in
+    Caret settings; the health check reports what actually resolved.
+  </p>
+  <p>Or scan instead of typing, once <code>--check</code> passes:</p>
+  <pre><code>python3 -m caret_backend --qr --url https://your-backend.example</code></pre>
+  <p>
+    That prints a <code>caret-connect:v1</code> symbol carrying the base URL
+    and the key; <code>--save ~/caret-connect.png</code> writes an owner-only
+    PNG instead. It refuses while any readiness blocker stands.
+    <strong>The code <em>is</em> the credential</strong> — anyone who scans it
+    can use this backend until you rotate <code>CARET_API_KEYS</code>. Format
+    and warnings: <a href="/legacy/connect/#qr">the connection QR</a>.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <table>
+    <tr><th>Symptom</th><th>Fix</th></tr>
+    <tr><td><code>503 internal_error: upstream agent unreachable</code></td>
+        <td>The backend cannot reach <code>CARET_AGENT_HTTP_URL</code> —
+            <code>curl</code> it from the backend's machine.</td></tr>
+    <tr><td><code>503 internal_error: upstream agent answered HTTP 401/403</code></td>
+        <td>Your endpoint rejected the bearer —
+            <code>CARET_AGENT_HTTP_BEARER</code> mismatch.</td></tr>
+    <tr><td><code>503 internal_error: upstream agent response has no "text"</code></td>
+        <td>Your endpoint's response shape is off. It must be a JSON object
+            with a non-empty string <code>text</code>.</td></tr>
+    <tr><td><code>504 ask_timeout</code></td>
+        <td>The whole chain must answer inside
+            <code>CARET_AGENT_TIMEOUT_S</code> (90 s default).</td></tr>
+  </table>
+  <p>
+    General transport and pairing problems are covered on
+    <a href="/legacy/connect/">the Connect overview</a>.
+  </p>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Caret — the agentic iOS keyboard.</span>
+    <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
+    <a href="https://typewithcaret.com">typewithcaret.com</a>
+    <a href="/legacy/connect/">Connect</a>
+    <a href="/legacy/your-agent/">Your Agent</a>
+  </div>
+</footer>
+</body>
+</html>
