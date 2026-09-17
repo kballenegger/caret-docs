@@ -266,6 +266,17 @@ class RepoTests(unittest.TestCase):
         for fragment in docs_check.README_FORBIDDEN:
             self.assertNotIn(fragment, readme)
 
+    def test_readme_leads_with_reference_and_keeps_spec_as_fallback(self):
+        readme = (docs_check.REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        lower = readme.lower()
+        self.assertIn("start with the reference", lower)
+        self.assertRegex(lower, r"clone the public\s+repository")
+        self.assertIn("protocol as a fallback", lower)
+        self.assertLess(lower.index("start with the reference"),
+                        lower.index("protocol as a fallback"))
+        self.assertNotIn("read the protocol", lower)
+        self.assertNotIn("builds and verifies a self-hosted backend", lower)
+
 
 if __name__ == "__main__":
     unittest.main()

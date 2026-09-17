@@ -1063,15 +1063,19 @@ func TestTranscriptOnAskAndImagine(t *testing.T) {
 		}
 	}
 
-	deaf, _ := newTestServer(t, Config{STT: "none", Agent: "loopback"})
-	spoken := audioOp("deaf", chunks)
-	spoken.route = RouteAsk
-	p := newChecker(deaf.URL).run(spoken)
-	if p.errorCode() != ErrTranscriptionFailed || p.close != 4503 {
-		t.Fatalf("audio /ask with no recognizer got %q %q close %d, want transcription_failed 4503", p.terminalKind(), p.errorCode(), p.close)
-	}
-	if p.terminal["retryable"] != true {
-		t.Errorf("retryable = %v, want true", p.terminal["retryable"])
+	deaf, _ := newTestServer(t, Config{STT: "none", Agent: "loopback", Image: "loopback"})
+	for _, route := range []string{RouteAsk, RouteImagine} {
+		t.Run("no recognizer "+route, func(t *testing.T) {
+			spoken := audioOp("deaf-"+route, chunks)
+			spoken.route = route
+			p := newChecker(deaf.URL).run(spoken)
+			if p.errorCode() != ErrTranscriptionFailed || p.close != 4503 {
+				t.Fatalf("audio /%s with no recognizer got %q %q close %d, want transcription_failed 4503", route, p.terminalKind(), p.errorCode(), p.close)
+			}
+			if p.terminal["retryable"] != true {
+				t.Errorf("retryable = %v, want true", p.terminal["retryable"])
+			}
+		})
 	}
 }
 
