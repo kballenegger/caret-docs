@@ -69,12 +69,11 @@ class HostedPageTests(unittest.TestCase):
         self.assertIn("/dictate", html)
 
     def test_hosted_page_documents_current_auth_and_fallback(self):
-        html = self.page.read_text(encoding="utf-8")
+        html = " ".join(self.page.read_text(encoding="utf-8").split())
         self.assertIn("Authorization: Bearer", html)
         self.assertIn("No query parameter", html)
         self.assertIn("no WebSocket subprotocol", html)
-        self.assertIn("signed", html)
-        self.assertIn("proof", html)
+        self.assertIn("no signed proof", html)
         self.assertIn("Unknown codes close with 4500", html)
         self.assertIn("524 288 bytes", html)
 
