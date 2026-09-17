@@ -102,15 +102,24 @@ class CheckTests(unittest.TestCase):
         self.assertIn("api.typewithcaret.com", findings[0])
 
     def test_published_markdown_cannot_link_to_retired_urls(self):
+        markdown = "See the [old guide](/legacy/)."
+        findings = docs_check.check_retired_references(
+            markdown, "agent/instructions.md"
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertIn("/legacy/", findings[0])
+
+    def test_assembled_site_rejects_broken_published_markdown_links(self):
         with tempfile.TemporaryDirectory() as tmp:
             site = Path(tmp)
             (site / "agent").mkdir()
             (site / "agent" / "instructions.md").write_text(
-                "See the [old guide](/legacy/)."
+                "See the [missing guide](/not-published/)."
             )
             findings = docs_check.check_site(site)
         self.assertEqual(len(findings), 1)
-        self.assertIn("/legacy/", findings[0])
+        self.assertIn("broken internal link", findings[0])
+        self.assertIn("/not-published/", findings[0])
 
 
 class SharedShellTests(unittest.TestCase):
