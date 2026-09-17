@@ -1,18 +1,30 @@
-# Caret — the caret/v4 any-agent protocol
+# Caret — the hosted Caret API and the caret/v4 any-agent protocol
 
-Caret is an iOS keyboard. Everything it does — taking dictation, writing
-a message, generating an image — it does by talking to a backend you
-configure: a base URL and a credential, no account, no relay, no third
-party in the middle of your typing.
+Caret is an iOS keyboard. Beyond on-device recognition, everything it
+does it does by talking to a backend, and the app offers three modes:
 
-The contract between keyboard and backend is **`caret/v4`**: one base
-URL serving three WebSocket routes — `/dictate`, `/ask`, `/imagine` —
-over one shared live-audio lifecycle, with health and capability
-discovery on `GET /health`. The protocol has no privileged party: any
-client and any backend may implement it, and two conforming
-implementations interoperate without ever having met.
+| Mode | Backend | Documented at |
+| --- | --- | --- |
+| Offline | On-device speech recognition. Nothing to configure. | nothing to document |
+| Caret API | The hosted service at `api.typewithcaret.com`. Paste a key, dictate. Dictate only. | [`docs/hosted/`](docs/hosted/index.html), <https://docs.typewithcaret.com/hosted/> |
+| Your Agent | A backend you run on the open `caret/v4` protocol: a base URL and a credential, no account, no relay, no third party in the middle of your typing. | [`docs/protocol/`](docs/protocol/index.html), <https://docs.typewithcaret.com/protocol/> |
 
-This repository is the protocol's public home.
+The open contract is **`caret/v4`**: one base URL serving three
+WebSocket routes — `/dictate`, `/ask`, `/imagine` — over one shared
+live-audio lifecycle, with health and capability discovery on
+`GET /health`. The protocol has no privileged party: any client and any
+backend may implement it, and two conforming implementations
+interoperate without ever having met.
+
+The hosted service also calls itself `caret/v4` but is a different wire:
+it answers health with `"contract": "caret/v4"` (the open protocol says
+`"protocol"`), dictates on `wss /v4/dictate` with sequence-numbered Opus
+or PCM16 frames, acks and resume, and keeps a per-account dictionary at
+`/v2/dictionary`. Auth on both is `Authorization: Bearer <key>`; the old
+hosted client-proof scheme is gone. The hosted page lists every
+difference.
+
+This repository is the public home of both.
 
 > **License notice:** this repository is **source-available, not open
 > source**. You may use, copy, and modify it to configure, run, or extend
@@ -50,7 +62,8 @@ a replay from becoming a second bill.
 
 | Page | What it covers |
 | --- | --- |
-| [Overview](https://docs.typewithcaret.com/) | The product surface and the design principles. |
+| [Overview](https://docs.typewithcaret.com/) | The three backend modes, how to tell the two wires apart, and the design principles. |
+| [Hosted Caret API](https://docs.typewithcaret.com/hosted/) | The `api.typewithcaret.com` contract: Bearer auth, `/health` and `/v4/health`, the `/v4/dictate` lifecycle, errors and close codes, limits, `/v2/dictionary`. |
 | [Reference implementation](https://docs.typewithcaret.com/reference/) | Two runnable V4 backends and conformance checkers, in [`reference/`](reference/README.md): Go (recommended) and Python, standard library only. |
 | [Migration](https://docs.typewithcaret.com/migration/) | Coming from `caret/v2`/`v3`: what changed, side-by-side serving at one base URL, cutover steps. |
 | [Cleanup (`caret-cleanup/1`)](https://docs.typewithcaret.com/cleanup/) | The published transcript-cleanup wording, versioned independently of the protocol, vendored in [`spec/cleanup/v1/`](spec/cleanup/v1/). |

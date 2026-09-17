@@ -15,6 +15,7 @@
     <span class="name"><a href="/">Caret Docs</a></span>
     <nav>
       <a href="/">Overview</a>
+      <a href="/hosted/">Hosted API</a>
       <a href="/protocol/">Protocol</a>
       <a href="/reference/">Reference</a>
       <a href="/migration/">Migration</a>
@@ -245,8 +246,11 @@ OpenClaw · OpenWhisper · Tailscale · QR code · API key</code></pre>
     <a href="/protocol/">The caret/v4 protocol</a> has the
     <code>/dictate</code> lifecycle, the <code>polish</code> finalizer
     field, and the vocabulary rules. The
-    <a href="/reference/">reference implementation design</a> pins how the
-    public backend will consume this spec as data when it lands.
+    <a href="/reference/">reference backends</a> consume this spec as
+    data from <code>spec/cleanup/v1/</code> and compose the same digest;
+    read <code>cleanup.go</code> or <code>cleanup.py</code> to see how.
+    The <a href="/hosted/">hosted Caret API</a> reports the digest it
+    runs in <code>cleanup.spec</code> on <code>/health</code>.
   </p>
 </main>
 

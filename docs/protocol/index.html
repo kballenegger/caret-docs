@@ -15,6 +15,7 @@
     <span class="name"><a href="/">Caret Docs</a></span>
     <nav>
       <a href="/">Overview</a>
+      <a href="/hosted/">Hosted API</a>
       <a href="/protocol/" aria-current="page">Protocol</a>
       <a href="/reference/">Reference</a>
       <a href="/migration/">Migration</a>
@@ -65,11 +66,14 @@
             <code>https://host/caret/health</code> and
             <code>wss://host/caret/dictate</code>.</td></tr>
     <tr><td>Transport</td>
-        <td>TLS is required: <code>https://</code> for health,
+        <td>TLS is the default: <code>https://</code> for health,
             <code>wss://</code> for the operation routes. Terminate TLS in a
-            reverse proxy or private tunnel if you like; plain
-            <code>http://</code>/<code>ws://</code> is refused by
-            clients.</td></tr>
+            reverse proxy or private tunnel if you like. The Caret app
+            accepts plain <code>http://</code>/<code>ws://</code> only for
+            hosts it can tell are local or private (localhost, RFC 1918
+            ranges, Tailscale addresses and <code>*.ts.net</code> names)
+            and marks the connection insecure in settings; any other
+            plain-<code>http://</code> base URL is refused.</td></tr>
     <tr><td>Versioning</td>
         <td>The version is in-band, not in the path: health reports
             <code>"protocol": "caret/v4"</code> and every <code>start</code>

@@ -27,6 +27,7 @@ DOCS = REPO_ROOT / "docs"
 
 REQUIRED_PAGES = (
     "index.html",
+    "hosted/index.html",
     "protocol/index.html",
     "reference/index.html",
     "migration/index.html",

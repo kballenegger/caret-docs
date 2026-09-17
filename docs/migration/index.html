@@ -15,6 +15,7 @@
     <span class="name"><a href="/">Caret Docs</a></span>
     <nav>
       <a href="/">Overview</a>
+      <a href="/hosted/">Hosted API</a>
       <a href="/protocol/">Protocol</a>
       <a href="/reference/">Reference</a>
       <a href="/migration/" aria-current="page">Migration</a>
@@ -94,13 +95,16 @@
   <h2>Cutover: backend operators</h2>
   <ol>
     <li><strong>Stand up V4</strong> against
-        <a href="/protocol/">the protocol page</a> (the
-        <a href="/reference/">public reference implementation</a> is a
-        design today, so this is an implementation task, not an
-        install).</li>
-    <li><strong>Verify with a real client</strong>: current Caret releases
-        speak V4; the §11 conformance checklist is the manual harness until
-        the runnable checker ships.</li>
+        <a href="/protocol/">the protocol page</a>. If you would rather
+        start from working code than from the spec, the
+        <a href="/reference/">public reference backends</a> in Go and
+        Python run in one command and take real recognizers and agents
+        through a lane flag.</li>
+    <li><strong>Run the conformance checker</strong> against your base
+        URL (<code>go run ./cmd/caret-v4-conform -url … -key …</code> from
+        <code>reference/go</code>, or <code>python3 -m caret_v4
+        conform</code>). It is the runnable form of the §11 checklist. Then
+        verify with a current Caret release in Your Agent mode.</li>
     <li><strong>Keep <code>/v2/</code> alive only while a pre-V4 client
         still uses it.</strong> If your only client is a current Caret
         build, skip straight to V4-only.</li>

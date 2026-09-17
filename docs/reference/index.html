@@ -15,6 +15,7 @@
     <span class="name"><a href="/">Caret Docs</a></span>
     <nav>
       <a href="/">Overview</a>
+      <a href="/hosted/">Hosted API</a>
       <a href="/protocol/">Protocol</a>
       <a href="/reference/" aria-current="page">Reference</a>
       <a href="/migration/">Migration</a>
@@ -187,6 +188,13 @@ python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure
   <ul>
     <li>Not a hosted service, not a relay — the protocol has no privileged
         party, and neither does the reference.</li>
+    <li>Not the <a href="/hosted/">hosted Caret API</a>. That service
+        speaks a different wire (<code>/v4/dictate</code>, sequence
+        headers, acks, resume) and answers health with
+        <code>contract</code> rather than <code>protocol</code>. The
+        checker will not pass against <code>api.typewithcaret.com</code>,
+        and the app's Caret API mode will not connect to these backends;
+        use Your Agent mode.</li>
     <li>Not a fork target for the cleanup wording: the spec is consumed
         as data from <a href="/cleanup/"><code>spec/cleanup/v1/</code></a>,
         digest-checked.</li>
