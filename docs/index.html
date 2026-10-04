@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Caret Docs: the caret/v4 protocol for your own backend</title>
-<meta name="description" content="Caret, the agentic iOS keyboard, can talk to a backend you run yourself over the open caret/v4 protocol. This site is the protocol contract, with runnable reference backends in Go and Python.">
+<meta name="description" content="Caret, the iOS keyboard and Mac menu-bar app, can talk to a backend you run yourself over the open caret/v4 protocol. This site is the protocol contract, with runnable reference backends in Go and Python.">
 <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
 </head>
@@ -43,9 +43,10 @@
   <p class="kicker">Your Agent · the caret/v4 protocol</p>
   <h1>Your keyboard, your agent, your machine.</h1>
   <p class="lead">
-    Caret is a compose surface for iOS: speak or type an intent at the
-    cursor, preview, insert a finished message. In Your Agent mode the
-    keyboard talks to a backend you run yourself over the open
+    Caret puts dictation at your cursor in two clients: a keyboard for
+    iPhone and a menu-bar app for Mac. Speak, and finished text lands
+    where you are typing. In Your Agent mode either client talks to a
+    backend you run yourself over the open
     <code>caret/v4</code> protocol: you enter a base URL and a credential,
     and no third party sits in the middle of your typing. This site is
     that protocol, plus two reference backends you can run today.
@@ -108,7 +109,8 @@
   <div class="card">
     <h3>Any client, any backend<span class="pill">no privileged party</span></h3>
     <p>
-      The Caret keyboard is one client of this protocol, not its owner.
+      The Caret clients, the iPhone keyboard and the Mac menu-bar app,
+      are clients of this protocol, not its owner.
       Anyone may implement a backend — your agent, your model, your
       hardware, any language — and anyone may implement a client, and two
       conforming implementations interoperate without coordination. Two
@@ -148,7 +150,7 @@
     Dictate is mandatory: a backend that cannot take speech is not a Caret
     backend, and says so in <code>/health</code> rather than pretending.
     Ask and Imagine are honestly optional — a dictate-only backend is a
-    complete backend, and the keyboard hides what a backend does not
+    complete backend, and the app hides what a backend does not
     advertise.
   </p>
 
@@ -187,11 +189,11 @@
   <h2>Design principles</h2>
   <ul>
     <li><strong>No privileged server.</strong> In Your Agent mode the
-        keyboard talks to the base URL and credential you enter. Any
+        app talks to the base URL and credential you enter. Any
         server that implements <code>caret/v4</code> works.</li>
     <li><strong>Capabilities are honest.</strong> <code>/health</code>
         declares what you actually serve, per route and per input mode; the
-        keyboard hides the rest rather than failing in the user's
+        app hides the rest rather than failing in the user's
         hands.</li>
     <li><strong>Typed terminal results.</strong> Exactly one
         <code>result</code> or <code>error</code> per operation, tagged by
@@ -216,7 +218,7 @@
 
 <footer class="site">
   <div class="wrap">
-    <span>Caret, the agentic iOS keyboard.</span>
+    <span>Caret: a keyboard for iPhone and a menu-bar app for Mac.</span>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
     <a href="https://github.com/kballenegger/caret-docs">Source on GitHub</a>
     <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>

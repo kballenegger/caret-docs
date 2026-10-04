@@ -1,9 +1,10 @@
 # Set up a self-hosted Caret backend
 
 Instructions for a coding agent. A person has pointed you here because
-they want their own backend for the Caret iOS keyboard, running on a
-machine they control, speaking the open `caret/v4` protocol. When you
-are done, the Caret app on their phone will be set to Your Agent mode
+they want their own backend for Caret (the iPhone keyboard, the Mac
+menu-bar app, or both), running on a machine they control, speaking the
+open `caret/v4` protocol. When you are done, the Caret app on their
+iPhone or Mac will be set to Your Agent mode
 with the base URL and credential of the backend you stood up, and a
 sentence they dictated will have come back as clean text through it.
 
@@ -63,7 +64,7 @@ the top of your plan.
    nothing to install on the target machine. Python 3.11+ works with no
    dependencies. Pick the one that fits the machine and the person's
    comfort. Both are complete and pass the same checks.
-2. **Where it runs and how the phone reaches it.** Same LAN, a Tailscale
+2. **Where it runs and how their iPhone or Mac reaches it.** Same LAN, a Tailscale
    or WireGuard network, a VPS with a domain, or a tunnel. This decides
    whether you need TLS in the backend, a reverse proxy, or nothing.
 3. **Speech recognition.** The loopback lane is a test fixture, not a
@@ -114,7 +115,7 @@ python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure
 ```
 
 Exit 0 means a V4 client will be happy. `-insecure` exists only because
-this is loopback HTTP; never use it against the address the phone will
+this is loopback HTTP; never use it against the address the client will
 use. Read the checker's output once in full. It prints one line per
 rule it checked and one SKIP line per rule it cannot check from outside
 (timeouts, keep-alives, constant-time credential comparison); those
@@ -234,7 +235,7 @@ with real audio (section 7).
 
 ## 7. Verify before you say it works
 
-All of these, in order, on the address the phone will actually use.
+All of these, in order, on the address the iPhone or Mac will actually use.
 
 1. **Health.** `curl -s https://<host>/health` returns
    `"protocol": "caret/v4"` and `"status": "ok"` with `"dictate": true`,
@@ -249,7 +250,7 @@ All of these, in order, on the address the phone will actually use.
    say so in your report. Quote the SKIP lines in your report too, so
    the person knows what was not checked from outside.
 3. **Real speech.** With the real recognizer wired, dictate through the
-   app: on the phone, choose Your Agent, enter the base URL and the
+   app: on the iPhone or Mac, choose Your Agent, enter the base URL and the
    credential, save (the app calls `/health` on save), and dictate one
    sentence into any text field. The sentence must arrive as clean text,
    not as vocabulary words and filler. If it does not, the recognizer is
