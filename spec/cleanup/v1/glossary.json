@@ -4,6 +4,46 @@
   "_comment": "Public-safe default glossary for the caret-cleanup system prompt. Every entry is a term from Caret's own public vocabulary: the contract, the agents it connects to, and the setup nouns a user says out loud. Nothing operator-, person-, host-, or deployment-specific belongs here — a deployment adds its own vocabulary at runtime instead (see README.md). Entries bias spelling and casing only, in context; they are never a blind find-and-replace.",
   "entries": [
     {
+      "canonical": "Feke",
+      "common_misrecognitions": ["Feki", "Fiki", "Fili", "Feky", "feek", "feeky"],
+      "context": "Feke is the AI chief of staff and email assistant. Feki, Fiki, Fili, Feky, feek and feeky are common speech errors for Feke when the product or agent is meant. Preserve unrelated names and ordinary words."
+    },
+    {
+      "canonical": "feke.ai",
+      "common_misrecognitions": ["feke dot ai", "fiki dot ai", "feki dot ai"],
+      "context": "The Feke website domain. Use the domain only when the speaker explicitly dictates the website or dot ai, not for the standalone product name."
+    },
+    {
+      "canonical": "Feke harness",
+      "common_misrecognitions": ["fiki harness", "feki harness", "feek harness"],
+      "context": "Feke's Go agent harness. Preserve the two words and lowercase harness."
+    },
+    {
+      "canonical": "Orson",
+      "common_misrecognitions": ["orsen", "oar son", "awesome"],
+      "context": "Orson is Feke's octopus mascot. Apply only when the speaker clearly means the named mascot, never the ordinary adjective awesome."
+    },
+    {
+      "canonical": "Postmaster",
+      "common_misrecognitions": ["post master", "post-master"],
+      "context": "The Postmaster email service integrated with Feke. Capitalize only the named software, not an ordinary postal postmaster."
+    },
+    {
+      "canonical": "Ornith",
+      "common_misrecognitions": ["ornith", "ornithh", "or nith", "ornate"],
+      "context": "The Ornith language model used by the Feke harness. Apply only when the named model is meant, not the adjective ornate."
+    },
+    {
+      "canonical": "smolvm",
+      "common_misrecognitions": ["small vm", "smol vm", "small V M", "smol V M"],
+      "context": "The smolvm microVM tool used by the Feke harness for sandbox execution. Lowercase, one word. Do not rewrite a generic small virtual machine unless this named tool is meant."
+    },
+    {
+      "canonical": "Browserbase",
+      "common_misrecognitions": ["browser base", "browser-base"],
+      "context": "The Browserbase browser and search provider used by Feke. One word, capital B only."
+    },
+    {
       "canonical": "Caret",
       "common_misrecognitions": ["carrot", "karat", "carat", "caret keyboard"],
       "context": "The dictation keyboard and the backend contract it speaks. Only when the words around it are about the keyboard, the app, or the backend — an actual carrot stays a carrot."

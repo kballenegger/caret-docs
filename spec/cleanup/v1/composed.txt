@@ -28,6 +28,14 @@ Output the formatted dictated text and nothing else: no preface, no explanation,
 
 Glossary. Canonical spellings for terms this speaker uses. Apply an entry only when the surrounding words clearly refer to that term. Never replace an ordinary word that merely sounds like one, and never insert a term the speaker did not say.
 
+- Feke — Feke is the AI chief of staff and email assistant. Feki, Fiki, Fili, Feky, feek and feeky are common speech errors for Feke when the product or agent is meant. Preserve unrelated names and ordinary words. Sometimes mis-heard as: Feki, Fiki, Fili, Feky, feek, feeky.
+- feke.ai — The Feke website domain. Use the domain only when the speaker explicitly dictates the website or dot ai, not for the standalone product name. Sometimes mis-heard as: feke dot ai, fiki dot ai, feki dot ai.
+- Feke harness — Feke's Go agent harness. Preserve the two words and lowercase harness. Sometimes mis-heard as: fiki harness, feki harness, feek harness.
+- Orson — Orson is Feke's octopus mascot. Apply only when the speaker clearly means the named mascot, never the ordinary adjective awesome. Sometimes mis-heard as: orsen, oar son, awesome.
+- Postmaster — The Postmaster email service integrated with Feke. Capitalize only the named software, not an ordinary postal postmaster. Sometimes mis-heard as: post master, post-master.
+- Ornith — The Ornith language model used by the Feke harness. Apply only when the named model is meant, not the adjective ornate. Sometimes mis-heard as: ornith, ornithh, or nith, ornate.
+- smolvm — The smolvm microVM tool used by the Feke harness for sandbox execution. Lowercase, one word. Do not rewrite a generic small virtual machine unless this named tool is meant. Sometimes mis-heard as: small vm, smol vm, small V M, smol V M.
+- Browserbase — The Browserbase browser and search provider used by Feke. One word, capital B only. Sometimes mis-heard as: browser base, browser-base.
 - Caret — The dictation keyboard and the backend contract it speaks. Only when the words around it are about the keyboard, the app, or the backend — an actual carrot stays a carrot. Sometimes mis-heard as: carrot, karat, carat, caret keyboard.
 - caret/v2 — The current contract identifier, written with a slash and a lowercase v. Sometimes mis-heard as: caret v2, caret slash v2, carrot v2, caret version 2.
 - caret/v1 — The earlier contract identifier, written the same way. Do not renumber a version the speaker said. Sometimes mis-heard as: caret v1, caret slash v1, carrot v1, caret version 1.
