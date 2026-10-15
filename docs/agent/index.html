@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent instructions: set up a self-hosted Caret backend</title>
-<meta name="description" content="One stable URL to hand a coding agent so it clones, configures and verifies the public caret/v4 reference backend for the Caret iOS keyboard, wired to your own tools.">
+<meta name="description" content="One stable URL to hand a coding agent so it clones, configures and verifies the public caret/v4 reference backend for Caret (iPhone keyboard or Mac menu-bar app), wired to your own tools.">
 <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
 </head>
@@ -64,7 +64,7 @@
 
   <h2>What to say</h2>
   <p>Something like this is enough:</p>
-  <pre><code>Set up a self-hosted backend for the Caret iOS keyboard.
+  <pre><code>Set up a self-hosted backend for Caret (iPhone or Mac).
 Follow https://docs.typewithcaret.com/agent/instructions.md exactly.
 Ask me the setup questions in section 2 before you start.</code></pre>
 
@@ -74,7 +74,7 @@ Ask me the setup questions in section 2 before you start.</code></pre>
     <tr><td>1 · What you are setting up</td>
         <td>The routes, what is mandatory and what is optional, when HTTPS is required. The reference implements all of it; the agent configures.</td></tr>
     <tr><td>2 · Ask before you build</td>
-        <td>Go or Python, where it runs and how the phone reaches it, which recognizer, which model for cleanup and ask, which image tool, credential, supervision. No vendors you did not name.</td></tr>
+        <td>Go or Python, where it runs and how your iPhone or Mac reaches it, which recognizer, which model for cleanup and ask, which image tool, credential, supervision. No vendors you did not name.</td></tr>
     <tr><td>3 · Clone and run the reference</td>
         <td>Clone the public repository, run the Go or Python reference on loopback, run the conformance checker against it.</td></tr>
     <tr><td>4 · Wire the adapters</td>
@@ -120,7 +120,7 @@ Ask me the setup questions in section 2 before you start.</code></pre>
 
 <footer class="site">
   <div class="wrap">
-    <span>Caret, the agentic iOS keyboard.</span>
+    <span>Caret: a keyboard for iPhone and a menu-bar app for Mac.</span>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
     <a href="https://github.com/kballenegger/caret-docs">Source on GitHub</a>
     <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
