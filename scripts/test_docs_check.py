@@ -234,6 +234,26 @@ class AgentInstructionsTests(unittest.TestCase):
         self.assertIn("not a developer API", self.md)
 
 
+class AgentSurfaceTests(unittest.TestCase):
+    def test_discovery_files_are_required_and_published(self):
+        for rel in ("llms.txt", "sitemap.xml", "404.md"):
+            self.assertIn(rel, docs_check.REQUIRED_PAGES)
+            self.assertTrue((docs_check.DOCS / rel).is_file())
+
+    def test_guide_and_recovery_point_at_current_pages(self):
+        guide = (docs_check.DOCS / "llms.txt").read_text()
+        self.assertIn("## When to use", guide)
+        recovery = (docs_check.DOCS / "404.md").read_text()
+        for rel in ("llms.txt", "sitemap.xml", "protocol/"):
+            self.assertIn("https://docs.typewithcaret.com/" + rel, recovery)
+
+    def test_sitemap_matches_the_active_pages(self):
+        import xml.etree.ElementTree as ET
+        root = ET.parse(docs_check.DOCS / "sitemap.xml").getroot()
+        locs = {n.text for n in root.iter("{http://www.sitemaps.org/schemas/sitemap/0.9}loc")}
+        self.assertEqual(locs, {"https://docs.typewithcaret.com" + p for p in docs_check.ACTIVE_PAGES})
+
+
 class RepoTests(unittest.TestCase):
     def test_the_docs_tree_passes(self):
         self.assertEqual(docs_check.main([]), 0)

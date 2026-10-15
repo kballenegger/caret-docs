@@ -6,8 +6,8 @@ Deterministic, standard library only. Enforced by `make test` and
 
   1. The required pages exist (overview, agent instructions, protocol,
      reference, cleanup, imagine references) and no other HTML page is
-     present. The only non-HTML page content is the agent instructions
-     Markdown, published verbatim at /agent/instructions.md.
+     present. Non-HTML content includes the agent instructions Markdown,
+     llms.txt, sitemap.xml and the recoverable Markdown error page.
   2. Every internal link in every page resolves to a file that the
      assembled site will actually contain. The expected site layout is
      mirrored from the Makefile's `site` target in EXTRA_SITE_FILES.
@@ -47,7 +47,7 @@ ACTIVE_PAGES = {
 }
 
 # Non-HTML files under docs/ that are published on purpose.
-PUBLISHED_FILES = ("agent/instructions.md",)
+PUBLISHED_FILES = ("agent/instructions.md", "llms.txt", "sitemap.xml", "404.md")
 
 REQUIRED_PAGES = tuple(ACTIVE_PAGES.values()) + PUBLISHED_FILES
 

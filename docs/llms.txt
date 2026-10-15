@@ -1,0 +1,23 @@
+# Caret documentation
+
+> Public documentation and reference implementations for the caret/v4 protocol.
+
+## When to use this site
+
+- To connect a coding agent to a self-hosted Caret backend, start at https://docs.typewithcaret.com/agent/ and its instructions at https://docs.typewithcaret.com/agent/instructions.md.
+- To configure and run an existing backend, start with the reference implementations at https://docs.typewithcaret.com/reference/.
+- To check the wire contract, read https://docs.typewithcaret.com/protocol/.
+- To check cleanup prompts and composition, read https://docs.typewithcaret.com/cleanup/.
+- To provide image references, read https://docs.typewithcaret.com/imagine-references/.
+
+This site documents caret/v4. It does not provide credentials or operate a backend on your behalf.
+
+## Pages
+
+- Overview: https://docs.typewithcaret.com/
+- Agent instructions: https://docs.typewithcaret.com/agent/
+- Protocol: https://docs.typewithcaret.com/protocol/
+- Reference implementations: https://docs.typewithcaret.com/reference/
+- Cleanup: https://docs.typewithcaret.com/cleanup/
+- Image references: https://docs.typewithcaret.com/imagine-references/
+- Site map: https://docs.typewithcaret.com/sitemap.xml
