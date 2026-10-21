@@ -1,7 +1,9 @@
 # Caret — the caret/v4 any-agent protocol
 
-Caret is an iOS keyboard. Beyond on-device recognition, everything it
-does it does by talking to a backend, and the app offers three modes:
+Caret is AI dictation in two clients: a keyboard for iPhone and a
+menu-bar app for Mac. Beyond on-device recognition, everything it does
+it does by talking to a backend, and both apps offer the same three
+modes:
 
 | Mode | Backend | Documented at |
 | --- | --- | --- |
