@@ -110,7 +110,7 @@
   <h2>2 · Health and capability discovery</h2>
   <p class="endpoint"><span class="method">GET</span> /health — HTTPS, no auth required</p>
   <p>
-    The only non-WebSocket surface, and the only anonymous one: a user
+    The only HTTP endpoint, and the only anonymous one: a user
     pasting a URL needs to learn whether it is a Caret backend before they
     have a credential. Clients call it on every settings save and
     periodically in use.
@@ -375,7 +375,7 @@ text  {"type":"finalize", …}        ──▶
   </table>
   <p>
     The answer is the message itself — no preamble, no quotation marks, no
-    Markdown fence. The user previews it before it is inserted, so Ask MUST
+    Markdown fence. Ask MUST
     be read-only: a draft that books the meeting it describes is a side
     effect nobody approved. Say so in your agent prompt, every time.
   </p>
@@ -607,7 +607,7 @@ go run ./cmd/caret-v4-conform -url https://your-backend.example -key "$CARET_API
 
 <footer class="site">
   <div class="wrap">
-    <span>Caret, the agentic iOS keyboard.</span>
+    <span>Caret, the iPhone keyboard for dictation, cleanup, and formatting.</span>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
     <a href="https://github.com/kballenegger/caret-docs">Source on GitHub</a>
     <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>

@@ -48,12 +48,11 @@
     <a href="https://github.com/kballenegger/caret-docs/tree/main/reference"><code>reference/</code></a>:
     one in Go, one in Python. Both are dependency-free, both run in one
     command, and each language's checker is run against the other
-    language's server, so their agreement about the protocol is
-    demonstrated rather than asserted.
+    language's server, to check that the implementations agree on the protocol.
   </p>
 
   <div class="note">
-    <strong>Start here, not from the spec.</strong>
+    <strong>Start with the reference backend.</strong>
     <p style="margin:0.4rem 0 0">
       Clone the repository, pick Go or Python, run it, and wire its
       lanes to the recognizer, model and image tool you already use.
@@ -90,7 +89,7 @@ python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure
   <p>
     Python 3.11 or newer, no virtualenv and no <code>pip install</code>,
     because there is nothing to install. Full setup, the lane grammar for
-    wiring real recognizers and agents, TLS, and an honest list of
+    wiring real recognizers and agents, TLS, and a list of
     limitations are in
     <a href="https://github.com/kballenegger/caret-docs/blob/main/reference/README.md"><code>reference/README.md</code></a>.
   </p>
@@ -113,8 +112,7 @@ python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure
     provider is advertised <code>false</code> on <code>/health</code> and
     answers <code>not_supported</code>. A backend with no speech lane
     reports <code>status: not_ready</code> with a <code>no_stt</code>
-    blocker, because <code>/dictate</code> is mandatory and pretending
-    otherwise is the failure mode the protocol exists to prevent.
+    blocker, because <code>/dictate</code> is mandatory under the protocol.
   </p>
   <p>
     A <code>command:</code> speech lane receives a WAV file (<code>{audio}</code>
@@ -149,8 +147,7 @@ python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure
     <li><strong>Readable before runnable.</strong> It is meant to be
         read: every rule on
         <a href="/protocol/">the protocol page</a> implemented once, in an
-        obvious place, in a codebase small enough to hold in your
-        head.</li>
+        obvious place, in a small codebase.</li>
     <li><strong>Dependency-free.</strong> Standard library only in both
         languages, WebSocket framing included. No framework, no build
         pipeline, no container, no lockfile. <code>go build ./...</code>
@@ -159,9 +156,7 @@ python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure
         agent, and image providers plug in behind narrow interfaces;
         whatever fails to resolve is reported off in
         <code>/health</code> rather than papered over.</li>
-    <li><strong>A conformance checker, not just a server.</strong> The
-        deliverable is as much the harness that can interrogate <em>any</em>
-        V4 backend as it is the backend itself.</li>
+    <li><strong>A conformance checker, not just a server.</strong> The checker can test any V4 backend.</li>
   </ol>
 
   <h2>Shape</h2>
@@ -226,14 +221,12 @@ python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure
     <code>ready</code>. Rules it cannot test from outside, such as the
     10 second start timeout, the 60 second frame gap and the keep-alive
     cadence, are printed as SKIP lines so the report says what was not
-    checked. Exit 0 means a V4 client will be happy; 1 means something
+    checked. Exit 0 means all required checks passed; 1 means a check
     failed; 2 means the checker could not run. Warnings never fail a run.
   </p>
   <pre><code>go run ./cmd/caret-v4-conform -url https://backend.example.com -key "$CARET_API_KEY"</code></pre>
   <p>
-    Point it at your backend, not just at these. It is the harness that
-    makes "conforming" a thing you can check rather than a thing you
-    claim.
+    Point it at your backend, not just at these. It checks protocol behavior and reports failures and skipped checks.
   </p>
 
   <h2>What it is not</h2>
@@ -265,7 +258,7 @@ python3 -m caret_v4 conform --url http://127.0.0.1:8080 --key dev-key --insecure
 
 <footer class="site">
   <div class="wrap">
-    <span>Caret, the agentic iOS keyboard.</span>
+    <span>Caret, the iPhone keyboard for dictation, cleanup, and formatting.</span>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
     <a href="https://github.com/kballenegger/caret-docs">Source on GitHub</a>
     <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>

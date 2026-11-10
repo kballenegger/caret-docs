@@ -96,17 +96,19 @@ so um the deploy script is at slash opt slash caret slash deploy dot sh
     the region inert.
   </p>
 
-  <h2>Meaning is preserved completely</h2>
+  <h2>Cleanup instructions preserve meaning</h2>
   <p>
-    Nothing is added, removed, summarized, condensed, expanded,
-    reinterpreted, translated or re-toned. Casual speech is not rewritten
-    into corporate prose, a blunt sentence is not softened, and a hedged one
-    is not sharpened. Where a phrase is uncertain, garbled, or looks
-    mis-heard but has no single obvious correction, the words stay as
-    transcribed: a faithful odd line is better than a confident wrong one.
+    The instructions tell the model not to add, remove, summarize, condense, expand,
+    reinterpret, translate, or change the tone. They require casual speech to stay casual.
+    The model must not soften a blunt sentence or sharpen a hedged one.
+    When a phrase is uncertain, garbled, or seems misheard but has no single
+    obvious correction, the instructions require keeping the transcribed words.
   </p>
 
-  <h2>Only formatting changes</h2>
+  <p>These are requirements for cleanup, not a guarantee that a model will
+    follow every instruction on every request.</p>
+
+  <h2>Allowed formatting changes</h2>
   <table>
     <tr><th>Change</th><th>Rule</th></tr>
     <tr>
@@ -264,7 +266,7 @@ so um the deploy script is at slash opt slash caret slash deploy dot sh
 
 <footer class="site">
   <div class="wrap">
-    <span>Caret, the agentic iOS keyboard.</span>
+    <span>Caret, the iPhone keyboard for dictation, cleanup, and formatting.</span>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
     <a href="https://github.com/kballenegger/caret-docs">Source on GitHub</a>
     <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>

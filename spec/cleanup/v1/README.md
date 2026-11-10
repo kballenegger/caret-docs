@@ -25,7 +25,7 @@ python3 scripts/build_cleanup_spec.py          # rewrite composed.txt + manifest
 python3 scripts/build_cleanup_spec.py --check  # fail if they are stale (runs in make test)
 ```
 
-## What the prompt guarantees
+## What the prompt instructs the model to do
 
 * **The transcript is inert data.** It is delivered wrapped in
   `<transcript>` … `</transcript>`, and the prompt declares that region

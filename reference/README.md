@@ -3,9 +3,9 @@
 Two runnable backends and two conformance checkers for the
 [`caret/v4` protocol](https://docs.typewithcaret.com/protocol/): one in
 Go, one in Python. Both are complete, both are dependency-free, and both
-speak the same wire.
+implement the same protocol.
 
-**Start here, not from the spec.** Clone, pick a language, run it, wire
+**Start with the reference backend.** Clone, pick a language, run it, wire
 its lanes to the recognizer, model and image tool you already use, and
 you have a backend. Writing one from scratch against the protocol page
 is for runtimes these two cannot run on. A coding agent can do the whole
@@ -59,7 +59,7 @@ cd reference/go
 go run ./cmd/caret-v4-conform -url http://127.0.0.1:8080 -key dev-key -insecure
 ```
 
-Exit 0 means a V4 client will be happy. Build standalone binaries with
+Exit 0 means all required checks passed. Build standalone binaries with
 `go build -o caret-v4-backend ./cmd/caret-v4-backend` and the same for
 `./cmd/caret-v4-conform`.
 
@@ -224,7 +224,7 @@ the value in `manifest.json`. Both currently report
 `caret-cleanup/1 20ab781577580c29`, from two codebases that share no
 code.
 
-## Limitations, honestly
+## Limitations
 
 * **The loopback providers are not models.** Loopback speech counts
   voiced 20 ms windows and spells the client's vocabulary followed by
@@ -234,13 +234,12 @@ code.
   exercisable with no model and no network. They are not a transcription
   service, and they never pretend to be one on `/health`.
 * **Text input reports no `stt_route`.** Nothing was recognized, so
-  there is no route to report, and inventing `"stream"` would be a lie
-  told to a client that may be logging it. `raw_transcript` carries the
+  there is no route to report, and `"stream"` would incorrectly report speech recognition. `raw_transcript` carries the
   text as it arrived, before cleanup.
 * **Partials come from the recognizer.** A buffered `command:` or HTTP
   speech lane has nothing to stream, so `partials` is advertised `false`
   for that configuration and the result reports
-  `stt_route: "fallback"`. This is the protocol working, not a gap.
+  `stt_route: "fallback"`. This behavior follows the protocol.
 * **In-memory state only.** The result cache and the audio buffer live
   in the process. The cache is keyed by credential, route and
   `client_request_id`, holds only delivered results, and drops an entry

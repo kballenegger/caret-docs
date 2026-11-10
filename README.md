@@ -1,7 +1,6 @@
 # Caret — the caret/v4 any-agent protocol
 
-Caret is an iOS keyboard. Beyond on-device recognition, everything it
-does it does by talking to a backend, and the app offers three modes:
+Caret is an iOS keyboard with three speech-processing modes:
 
 | Mode | Backend | Documented at |
 | --- | --- | --- |
@@ -13,8 +12,7 @@ The open contract is **`caret/v4`**: one base URL serving three
 WebSocket routes — `/dictate`, `/ask`, `/imagine` — over one shared
 live-audio lifecycle, with health and capability discovery on
 `GET /health`. The protocol has no privileged party: any client and any
-backend may implement it, and two conforming implementations
-interoperate without ever having met.
+backend may implement it, and conforming clients and backends can interoperate.
 
 This repository is the public home of that protocol.
 

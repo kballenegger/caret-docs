@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Caret Docs: the caret/v4 protocol for your own backend</title>
-<meta name="description" content="Caret, the agentic iOS keyboard, can talk to a backend you run yourself over the open caret/v4 protocol. This site is the protocol contract, with runnable reference backends in Go and Python.">
+<meta name="description" content="Caret, the iPhone keyboard for dictation, cleanup, and formatting, can talk to a backend you run yourself over the open caret/v4 protocol. This site is the protocol contract, with runnable reference backends in Go and Python.">
 <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
 </head>
@@ -43,11 +43,12 @@
   <p class="kicker">Your Agent · the caret/v4 protocol</p>
   <h1>Your keyboard, your agent, your machine.</h1>
   <p class="lead">
-    Caret is a compose surface for iOS: speak or type an intent at the
-    cursor, preview, insert a finished message. In Your Agent mode the
+    Caret is an iPhone keyboard that cleans up and formats your speech
+    before inserting it where you are typing. You can also ask your agent
+    to write a reply. In Your Agent mode the
     keyboard talks to a backend you run yourself over the open
     <code>caret/v4</code> protocol: you enter a base URL and a credential,
-    and no third party sits in the middle of your typing. This site is
+    and the app connects directly to that backend. This site is
     that protocol, plus two reference backends you can run today.
   </p>
 
@@ -75,15 +76,14 @@
   </table>
 
   <div class="card">
-    <h3>The protocol<span class="pill">start here</span></h3>
+    <h3>The protocol<span class="pill">contract</span></h3>
     <p>
       One base URL serving three WebSocket routes — <code>/dictate</code>,
       <code>/ask</code>, <code>/imagine</code> — over one shared live-audio
       lifecycle: stream speech up, watch partial transcripts arrive while
       you talk, send the route's finalizer, get exactly one typed terminal
       result. Health and capability discovery on <code>GET /health</code>,
-      auth owned by the backend, per-operation vocabulary injection, and a
-      reliability story built on client-side replay. The protocol page is
+      auth owned by the backend, per-operation vocabulary injection, and recovery through client-side replay. The protocol page is
       the complete, normative contract — everything you need to implement
       either side. Most people never need to: the reference backends
       below implement it already, and you configure rather than write.
@@ -133,8 +133,7 @@
     </tr>
     <tr>
       <td><code>/ask</code> · optional</td>
-      <td>An instruction — spoken or typed — becomes one message, previewed
-          before it is inserted.</td>
+      <td>A spoken or typed instruction becomes one message.</td>
       <td><code>"message"</code></td>
     </tr>
     <tr>
@@ -147,25 +146,22 @@
   <p>
     Dictate is mandatory: a backend that cannot take speech is not a Caret
     backend, and says so in <code>/health</code> rather than pretending.
-    Ask and Imagine are honestly optional — a dictate-only backend is a
-    complete backend, and the keyboard hides what a backend does not
-    advertise.
+    Ask and Imagine are optional. A dictate-only backend is complete,
+    and the keyboard hides capabilities the backend does not advertise.
   </p>
 
   <h2>Why a live socket</h2>
   <ul>
-    <li><strong>You see your words as you say them.</strong> Every route
-        streams cumulative partial transcripts while the user speaks, so
-        the text is on screen before the sentence ends.</li>
+    <li><strong>You see your words as you say them.</strong> When the backend supports live transcripts, text appears while
+        you speak.</li>
     <li><strong>One lifecycle to implement.</strong> The routes differ only
         in their finalizer and their typed result; the connection handling,
         audio framing, reliability rules, and error table are identical
         across all three.</li>
     <li><strong>Reliability without server state.</strong> The client keeps
         the audio it captured until a result is in hand; finalize totals
-        prove the server heard everything; idempotent replay on a fresh
-        connection recovers from any dropped transport without double
-        work.</li>
+        prove the server heard everything; replay on a fresh connection lets the client retry after a
+        dropped connection.</li>
   </ul>
 
   <div class="card">
@@ -216,7 +212,7 @@
 
 <footer class="site">
   <div class="wrap">
-    <span>Caret, the agentic iOS keyboard.</span>
+    <span>Caret, the iPhone keyboard for dictation, cleanup, and formatting.</span>
     <a href="https://typewithcaret.com">typewithcaret.com</a>
     <a href="https://github.com/kballenegger/caret-docs">Source on GitHub</a>
     <a href="https://github.com/kballenegger/caret-docs/blob/main/LICENSE">Source-available license</a>
