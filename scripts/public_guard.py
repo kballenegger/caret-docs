@@ -40,6 +40,12 @@ PRIVATE_IDENTIFIERS = (
     _J(("min", "ions")),                 # private worker infrastructure
     _J(("uto", "pian")),                 # private org naming
 )
+# Narrow exception: the publisher's legal name, which the product site
+# and the App Store listing already show, is named in the pages'
+# structured data. Only this exact phrase is allowed; the bare org
+# identifier above stays forbidden everywhere else.
+ALLOWED_PHRASES = (_J(("uto", "pian ventures, llc")),)
+
 # Note: the repo owner's public GitHub handle (github.com/kballenegger) is
 # deliberately NOT forbidden — it is the public home of this repository.
 
@@ -105,6 +111,8 @@ def scan_text(text: str, origin: str) -> list[str]:
     findings = []
     for lineno, line in enumerate(text.splitlines(), start=1):
         lowered = line.lower()
+        for phrase in ALLOWED_PHRASES:
+            lowered = lowered.replace(phrase, "")
         for ident in PRIVATE_IDENTIFIERS:
             if ident in lowered:
                 findings.append(

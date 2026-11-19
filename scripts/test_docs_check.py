@@ -236,9 +236,26 @@ class AgentInstructionsTests(unittest.TestCase):
 
 class AgentSurfaceTests(unittest.TestCase):
     def test_discovery_files_are_required_and_published(self):
-        for rel in ("llms.txt", "sitemap.xml", "404.md"):
+        for rel in ("llms.txt", "404.md", "robots.txt"):
             self.assertIn(rel, docs_check.REQUIRED_PAGES)
             self.assertTrue((docs_check.DOCS / rel).is_file())
+        self.assertIn("sitemap.xml", docs_check.EXTRA_SITE_FILES)
+        for url in docs_check.ACTIVE_PAGES:
+            self.assertIn(url.lstrip("/") + "index.md", docs_check.EXTRA_SITE_FILES)
+
+    def test_assembled_site_must_hold_the_generated_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            findings = docs_check.check_site_complete(Path(tmp))
+        for rel in ("sitemap.xml", "index.md", "protocol/index.md", ".lastmod.tsv", "robots.txt"):
+            self.assertTrue(any(f.endswith(f"/{rel}: expected in the assembled site but missing")
+                                for f in findings), rel)
+
+    def test_robots_allows_every_crawler_and_names_the_sitemap(self):
+        robots = (docs_check.DOCS / "robots.txt").read_text()
+        for agent in ("GPTBot", "ClaudeBot", "PerplexityBot", "Googlebot", "*"):
+            self.assertIn(f"User-agent: {agent}\nAllow: /\n", robots)
+        self.assertNotIn("Disallow", robots)
+        self.assertTrue(robots.rstrip().endswith("Sitemap: https://docs.typewithcaret.com/sitemap.xml"))
 
     def test_guide_and_recovery_point_at_current_pages(self):
         guide = (docs_check.DOCS / "llms.txt").read_text()
@@ -249,9 +266,21 @@ class AgentSurfaceTests(unittest.TestCase):
 
     def test_sitemap_matches_the_active_pages(self):
         import xml.etree.ElementTree as ET
-        root = ET.parse(docs_check.DOCS / "sitemap.xml").getroot()
+        import build_site_extras
+        from datetime import datetime, timezone
+        when = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        xml = build_site_extras.sitemap({url: when for url in docs_check.ACTIVE_PAGES})
+        root = ET.fromstring(xml)
         locs = {n.text for n in root.iter("{http://www.sitemaps.org/schemas/sitemap/0.9}loc")}
         self.assertEqual(locs, {"https://docs.typewithcaret.com" + p for p in docs_check.ACTIVE_PAGES})
+
+    def test_docs_site_urls_are_checked_as_internal_links(self):
+        self.assertEqual(
+            docs_check.resolve("https://docs.typewithcaret.com/protocol/", "index.md"),
+            "protocol/index.html",
+        )
+        self.assertEqual(docs_check.resolve("https://docs.typewithcaret.com", "index.md"), "index.html")
+        self.assertIsNone(docs_check.resolve("https://typewithcaret.com/llms.txt", "llms.txt"))
 
 
 class RepoTests(unittest.TestCase):

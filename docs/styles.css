@@ -236,6 +236,7 @@ h3 {
 
 p, li { color: var(--ink); }
 
+.updated { font-family: var(--mono); font-size: 0.75rem; color: var(--muted); margin: -0.5rem 0 1.25rem; }
 .lead { font-size: 1.1rem; color: var(--muted); margin-bottom: 2rem; }
 
 a { color: var(--signal); text-decoration: none; }

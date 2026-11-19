@@ -82,7 +82,11 @@ scripts, the V4 reference implementations' suites (`make reference-test`
 on its own; the Go half is skipped with a notice when no Go toolchain is
 installed), and the hermetic test suite of the pre-V4 backend kept under
 `legacy/` for history. `make site` assembles the deployable static site
-into `_site/` and runs both guards against the output.
+into `_site/` and runs both guards against the output. While assembling,
+`scripts/build_site_extras.py` dates each page from the last git commit
+that touched it and writes its Markdown twin (`<page>/index.md`), head
+metadata (canonical, Markdown alternate, JSON-LD), `sitemap.xml`, the page
+list in `llms.txt`, and `.lastmod.tsv` for the deploy.
 
 ## License
 

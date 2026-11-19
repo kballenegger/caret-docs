@@ -11,13 +11,3 @@
 - To provide image references, read https://docs.typewithcaret.com/imagine-references/.
 
 This site documents caret/v4. It does not provide credentials or operate a backend on your behalf.
-
-## Pages
-
-- Overview: https://docs.typewithcaret.com/
-- Agent instructions: https://docs.typewithcaret.com/agent/
-- Protocol: https://docs.typewithcaret.com/protocol/
-- Reference implementations: https://docs.typewithcaret.com/reference/
-- Cleanup: https://docs.typewithcaret.com/cleanup/
-- Image references: https://docs.typewithcaret.com/imagine-references/
-- Site map: https://docs.typewithcaret.com/sitemap.xml

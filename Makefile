@@ -23,6 +23,9 @@ help:
 # docs/ plus spec/cleanup/v1/ is the whole published tree: the current
 # caret/v4 pages and nothing else. Pre-V4 material under legacy/ is kept
 # for history only and never copied in; its old URLs 404.
+# scripts/build_site_extras.py then adds each page's Markdown twin
+# (<dir>/index.md), its git-derived date, head metadata, sitemap.xml,
+# the page list in llms.txt, and .lastmod.tsv.
 # scripts/docs_check.py mirrors this layout in EXTRA_SITE_FILES — change
 # both together.
 site:
@@ -30,6 +33,7 @@ site:
 	mkdir -p _site/spec/cleanup/v1
 	cp -R docs/. _site/
 	cp spec/cleanup/v1/* _site/spec/cleanup/v1/
+	$(PYTHON) scripts/build_site_extras.py _site
 	$(PYTHON) scripts/public_guard.py
 	$(PYTHON) scripts/docs_check.py --site _site
 

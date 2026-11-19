@@ -64,6 +64,12 @@ class ScanTextTests(unittest.TestCase):
         self.assert_clean("stored client-side in the iOS Keychain")
         self.assert_clean("~/caret-docs is fine: it is this repository")
 
+    def test_publisher_name_is_the_only_allowed_use_of_the_org_name(self):
+        org = "Uto" + "pian"
+        self.assert_clean(f'"publisher": {{"name": "{org} Ventures, LLC"}}')
+        self.assert_flags(f"{org} Ventures")
+        self.assert_flags(f"{org} Ventures, LLC and {org.lower()} labs")
+
     def test_reports_file_and_line(self):
         findings = public_guard.scan_text("ok\nsee /Users" + "/alice/x\n", "docs/a.md")
         self.assertEqual(len(findings), 1)
